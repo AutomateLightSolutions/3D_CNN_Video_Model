@@ -9,10 +9,26 @@ DB_PATH = BASE_DIR / "labels.db"
 TRAINING_LOG_PATH = BASE_DIR / "training.log"
 PID_FILE = BASE_DIR / "trainer.pid"
 
-EVENT_CLASSES = [
-    "goal", "near_miss", "penalty", "red_card",
-    "key_tackle", "free_kick", "crowd_reaction", "null"
+HIGHLIGHT_CLASSES = [
+    "try", "conversion", "kick_off", "penalty_kick", "drop_goal",
+    "near_try", "scrum", "lineout", "touch_kick", "intercept",
+    "tackle", "ruck", "maul", "red_card", "yellow_card",
+    "turnover", "line_break", "cross_kick", "penalty", "knock_on",
+    "replay", "tmo_review", "normal_play"
 ]
-WINDOW_SIZES = [2, 4, 8]
+
+# Classes that inherit score from parent event — used in UI logic
+CONTEXT_CLASSES = ["replay", "tmo_review"]
+
+# Window config: window_size_s -> {frames, stride_s}
+WINDOW_CONFIG = {
+    8:  {"frames": 16, "stride_s": 4},
+    16: {"frames": 32, "stride_s": 8},
+    32: {"frames": 48, "stride_s": 16},
+}
+
+WINDOW_SIZES = [8, 16, 32]  # seconds
+
+# Keep for backward compat
 CLIP_FPS = 25
 CLIP_RESOLUTION = 224

@@ -21,7 +21,7 @@ from clip_extractor import run_extraction
 from config import (
     CLIPS_DIR, MODEL_DIR, EXPORT_DIR,
     TRAINING_LOG_PATH, PID_FILE,
-    EVENT_CLASSES, WINDOW_SIZES,
+    HIGHLIGHT_CLASSES, WINDOW_SIZES, WINDOW_CONFIG,
 )
 from database import Base, engine, get_db
 
@@ -42,7 +42,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.mount("/clips", StaticFiles(directory=str(CLIPS_DIR), html=False), name="clips")
+app.mount("/media", StaticFiles(directory=str(CLIPS_DIR), html=False), name="media")
 
 
 # ---------------------------------------------------------------------------
@@ -52,7 +52,7 @@ app.mount("/clips", StaticFiles(directory=str(CLIPS_DIR), html=False), name="cli
 def _clip_url(clip_path: str) -> str:
     try:
         rel = Path(clip_path).relative_to(CLIPS_DIR)
-        return "/clips/" + str(rel).replace("\\", "/")
+        return "/media/" + str(rel).replace("\\", "/")
     except ValueError:
         return clip_path
 
@@ -129,6 +129,18 @@ def list_matches(db: Session = Depends(get_db)):
     return [_match_out(m, db) for m in matches]
 
 
+@app.delete("/matches/{match_id}")
+def delete_match(match_id: int, db: Session = Depends(get_db)):
+    match = db.query(models.Match).filter(models.Match.id == match_id).first()
+    if not match:
+        raise HTTPException(status_code=404, detail="Match not found")
+    if match.status == "extracting":
+        raise HTTPException(status_code=409, detail="Cannot delete while extraction is running")
+    db.delete(match)
+    db.commit()
+    return {"message": "Match deleted"}
+
+
 @app.post("/matches/{match_id}/extract")
 def extract_clips(match_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     match = db.query(models.Match).filter(models.Match.id == match_id).first()
@@ -151,13 +163,23 @@ def extraction_progress(match_id: int, db: Session = Depends(get_db)):
 
     duration = match.duration_seconds
     total = 0
-    for ws in WINDOW_SIZES:
-        stride = ws // 2
+    for ws, cfg in WINDOW_CONFIG.items():
+        stride = cfg["stride_s"]
         if duration >= ws:
             total += int((duration - ws) / stride) + 1
 
     done = db.query(models.Clip).filter(models.Clip.match_id == match_id).count()
     return schemas.ExtractionProgress(clips_total=total, clips_done=done)
+
+
+@app.get("/matches/{match_id}/extraction-log")
+def extraction_log(match_id: int):
+    from config import BASE_DIR
+    log_path = BASE_DIR / f"extraction_{match_id}.log"
+    if not log_path.exists():
+        return {"lines": []}
+    lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    return {"lines": lines[-60:]}
 
 
 # ---------------------------------------------------------------------------
@@ -414,7 +436,7 @@ def export_stats(db: Session = Depends(get_db)):
     skipped = db.query(models.Clip).filter(models.Clip.status == "skipped").count()
     unlabeled = total - labeled - skipped
 
-    class_counts: dict = {cls: 0 for cls in EVENT_CLASSES}
+    class_counts: dict = {cls: 0 for cls in HIGHLIGHT_CLASSES}
     for lbl in db.query(models.Label).all():
         if lbl.event_class in class_counts:
             class_counts[lbl.event_class] += 1

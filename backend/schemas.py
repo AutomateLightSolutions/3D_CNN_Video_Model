@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict
-from typing import Optional, List
+from typing import Optional
 from datetime import datetime
 
 
@@ -17,7 +17,7 @@ class LabelOut(BaseModel):
     highlight_score: float
     t_start_adjusted: float
     t_end_adjusted: float
-    notes: Optional[str]
+    notes: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -33,7 +33,7 @@ class ClipOut(BaseModel):
     t_end: float
     window_size: int
     status: str
-    label: Optional[LabelOut]
+    label: Optional[LabelOut] = None
 
 
 class MatchOut(BaseModel):
@@ -42,8 +42,8 @@ class MatchOut(BaseModel):
     id: int
     name: str
     file_path: str
-    duration_seconds: Optional[float]
-    fps: Optional[float]
+    duration_seconds: Optional[float] = None
+    fps: Optional[float] = None
     status: str
     created_at: datetime
     clip_count: int
