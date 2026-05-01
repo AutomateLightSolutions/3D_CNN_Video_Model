@@ -29,12 +29,18 @@ function useAnnotateState(clip) {
     }
   }, [clip?.id])
 
+  const onTimelineChange = useCallback(({ tStart, tEnd }) => {
+    setTStartAdj(tStart)
+    setTEndAdj(tEnd)
+  }, [])
+
   return {
     eventClass, setEventClass,
     score, setScore,
     tStartAdj, setTStartAdj,
     tEndAdj, setTEndAdj,
     notes, setNotes,
+    onTimelineChange,
   }
 }
 
@@ -238,7 +244,9 @@ export default function Annotate() {
                   matchDuration={matchDuration}
                   tStart={ann.tStartAdj}
                   tEnd={ann.tEndAdj}
-                  onChange={({ tStart, tEnd }) => { ann.setTStartAdj(tStart); ann.setTEndAdj(tEnd) }}
+                  clipStart={clip.t_start}
+                  clipEnd={clip.t_end}
+                  onChange={ann.onTimelineChange}
                 />
               </div>
 

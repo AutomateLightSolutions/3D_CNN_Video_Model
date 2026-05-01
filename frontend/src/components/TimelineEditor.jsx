@@ -4,25 +4,28 @@ const HANDLE_R = 7
 const BAR_H = 18
 const PADDING = 16
 
-export default function TimelineEditor({ matchDuration, tStart, tEnd, onChange }) {
+export default function TimelineEditor({ matchDuration, tStart, tEnd, clipStart, clipEnd, onChange }) {
   const canvasRef = useRef(null)
   const dragging = useRef(null) // 'start' | 'end' | null
-  const stateRef = useRef({ tStart, tEnd, matchDuration })
+  const stateRef = useRef({ tStart, tEnd, matchDuration, clipStart, clipEnd })
 
   useEffect(() => {
-    stateRef.current = { tStart, tEnd, matchDuration }
+    stateRef.current = { tStart, tEnd, matchDuration, clipStart, clipEnd }
     draw()
-  }, [tStart, tEnd, matchDuration])
+  }, [tStart, tEnd, matchDuration, clipStart, clipEnd])
 
   const getCanvas = () => canvasRef.current
 
+  // Use matchDuration if available; fall back to tEnd * 1.1 so handles stay on-canvas
+  const getEffectiveDur = () => stateRef.current.matchDuration || (stateRef.current.tEnd * 1.1) || 1
+
   const timeToX = (t, W) => {
-    const dur = stateRef.current.matchDuration || 1
+    const dur = getEffectiveDur()
     return PADDING + (t / dur) * (W - 2 * PADDING)
   }
 
   const xToTime = (x, W) => {
-    const dur = stateRef.current.matchDuration || 1
+    const dur = getEffectiveDur()
     const t = ((x - PADDING) / (W - 2 * PADDING)) * dur
     return Math.max(0, Math.min(dur, t))
   }
@@ -39,7 +42,7 @@ export default function TimelineEditor({ matchDuration, tStart, tEnd, onChange }
     const trackY = H / 2 - BAR_H / 2
     const xS = timeToX(s, W)
     const xE = timeToX(e, W)
-    const xFull = timeToX(dur || 1, W)
+    const xFull = timeToX(getEffectiveDur(), W)
 
     // Full match track
     ctx.fillStyle = '#2a2a2a'
@@ -92,6 +95,20 @@ export default function TimelineEditor({ matchDuration, tStart, tEnd, onChange }
     if (hit) { dragging.current = hit; ev.preventDefault() }
   }
 
+  const clampStart = (val, e) => {
+    const { clipStart: cs, clipEnd: ce } = stateRef.current
+    const min = cs ?? -Infinity
+    const max = Math.min(ce ?? Infinity, e) - 0.1
+    return Math.max(min, Math.min(max, val))
+  }
+
+  const clampEnd = (val, s) => {
+    const { clipStart: cs, clipEnd: ce } = stateRef.current
+    const min = Math.max(cs ?? -Infinity, s) + 0.1
+    const max = ce ?? Infinity
+    return Math.max(min, Math.min(max, val))
+  }
+
   const onMouseMove = useCallback((ev) => {
     if (!dragging.current) return
     const canvas = getCanvas()
@@ -101,11 +118,11 @@ export default function TimelineEditor({ matchDuration, tStart, tEnd, onChange }
     const t = xToTime(x, canvas.width)
     const { tStart: s, tEnd: e } = stateRef.current
     if (dragging.current === 'start') {
-      const newS = Math.min(t, e - 0.1)
+      const newS = clampStart(t, e)
       stateRef.current.tStart = newS
       onChange?.({ tStart: newS, tEnd: e })
     } else {
-      const newE = Math.max(t, s + 0.1)
+      const newE = clampEnd(t, s)
       stateRef.current.tEnd = newE
       onChange?.({ tStart: s, tEnd: newE })
     }
@@ -126,6 +143,21 @@ export default function TimelineEditor({ matchDuration, tStart, tEnd, onChange }
   const dur = tEnd - tStart
   const fmt = (s) => (s == null ? '—' : s.toFixed(2) + 's')
 
+  const handleInputChange = (field, raw) => {
+    const val = parseFloat(raw)
+    if (isNaN(val)) return
+    if (field === 'start') {
+      onChange?.({ tStart: clampStart(val, tEnd), tEnd })
+    } else {
+      onChange?.({ tStart, tEnd: clampEnd(val, tStart) })
+    }
+  }
+
+  const startMin = clipStart ?? 0
+  const startMax = (clipEnd ?? tEnd) - 0.1
+  const endMin = (clipStart ?? tStart) + 0.1
+  const endMax = clipEnd ?? undefined
+
   return (
     <div className="timeline-wrap">
       <canvas
@@ -134,12 +166,36 @@ export default function TimelineEditor({ matchDuration, tStart, tEnd, onChange }
         width={560}
         height={48}
         onMouseDown={onMouseDown}
-        style={{ width: '100%', height: 48 }}
+        style={{ width: '100%', height: 48, cursor: 'ew-resize' }}
       />
       <div className="timeline-labels">
         <span>Start: {fmt(tStart)}</span>
         <span>Duration: {fmt(dur)}</span>
         <span>End: {fmt(tEnd)}</span>
+      </div>
+      <div className="timeline-inputs">
+        <label>
+          t_start <span className="timeline-hint">({fmt(startMin)} – {fmt(startMax)})</span>
+          <input
+            type="number"
+            step="0.1"
+            min={startMin.toFixed(2)}
+            max={startMax.toFixed(2)}
+            value={tStart != null ? tStart.toFixed(2) : ''}
+            onChange={e => handleInputChange('start', e.target.value)}
+          />
+        </label>
+        <label>
+          t_end <span className="timeline-hint">({fmt(endMin)} – {fmt(endMax)})</span>
+          <input
+            type="number"
+            step="0.1"
+            min={endMin.toFixed(2)}
+            max={endMax != null ? endMax.toFixed(2) : undefined}
+            value={tEnd != null ? tEnd.toFixed(2) : ''}
+            onChange={e => handleInputChange('end', e.target.value)}
+          />
+        </label>
       </div>
     </div>
   )
