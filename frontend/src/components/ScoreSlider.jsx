@@ -29,7 +29,7 @@ export default function ScoreSlider({ value, onChange }) {
           type="range"
           min="0"
           max="1"
-          step="0.05"
+          step="0.01"
           value={value}
           style={trackStyle}
           onChange={(e) => onChange(parseFloat(e.target.value))}

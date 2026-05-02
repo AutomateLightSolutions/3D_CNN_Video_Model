@@ -224,6 +224,26 @@ export default function Annotate() {
               </div>
             </div>
           )}
+
+          <div className="card score-guide">
+            <h3 className="score-guide-title">Confidence Score Guide</h3>
+            <table className="score-guide-table">
+              <thead>
+                <tr>
+                  <th>Score</th>
+                  <th>Rugby meaning</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td className="score-range score-range-5">0.90–1.00</td><td>Try scored, especially from distance or after long phase play</td></tr>
+                <tr><td className="score-range score-range-4">0.75–0.89</td><td>Penalty goal, conversion, turnover leading directly to try</td></tr>
+                <tr><td className="score-range score-range-3">0.55–0.74</td><td>Near try (held up), big breakdown win, yellow / red card</td></tr>
+                <tr><td className="score-range score-range-2">0.30–0.54</td><td>Scrum or lineout with significant outcome, penalty in dangerous position</td></tr>
+                <tr><td className="score-range score-range-1">0.05–0.29</td><td>Routine phase play, reset scrum, standard lineout</td></tr>
+                <tr><td className="score-range score-range-0">0.00–0.04</td><td>Dead ball, injury stoppage, nothing happening</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
 
         {/* Right: annotation controls */}

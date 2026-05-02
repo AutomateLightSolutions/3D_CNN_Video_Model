@@ -351,6 +351,50 @@ input[type=range]::-webkit-slider-thumb {
   font-variant-numeric: tabular-nums;
 }
 
+/* ---------- score guide ---------- */
+.score-guide { padding: 12px 14px; }
+.score-guide-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-0);
+  margin: 0 0 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.score-guide-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.score-guide-table th {
+  text-align: left;
+  color: var(--text-1);
+  font-weight: 600;
+  padding: 3px 6px 5px;
+  border-bottom: 1px solid var(--border);
+}
+.score-guide-table td {
+  padding: 4px 6px;
+  color: var(--text-1);
+  vertical-align: top;
+}
+.score-guide-table tr:not(:last-child) td {
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.score-range {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+.score-range-5 { color: #22c55e; }   /* 0.90–1.00 green */
+.score-range-4 { color: #84cc16; }   /* 0.75–0.89 lime */
+.score-range-3 { color: #eab308; }   /* 0.55–0.74 yellow */
+.score-range-2 { color: #f97316; }   /* 0.30–0.54 orange */
+.score-range-1 { color: #94a3b8; }   /* 0.05–0.29 slate */
+.score-range-0 { color: #475569; }   /* 0.00–0.04 dim */
+
 /* ---------- progress bar ---------- */
 .progress-bar-wrap {
   background: var(--bg-3);
