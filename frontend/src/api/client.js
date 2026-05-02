@@ -41,10 +41,11 @@ export const listClips = ({ matchId, status, windowSize } = {}) => {
 
 export const getClip = (id) => req(`/clips/${id}`)
 
-export const getNextClip = ({ matchId, afterClipId } = {}) => {
+export const getNextClip = ({ matchId, afterClipId, windowSize } = {}) => {
   const p = new URLSearchParams()
   if (matchId)    p.set('match_id', matchId)
   if (afterClipId) p.set('after_clip_id', afterClipId)
+  if (windowSize)  p.set('window_size', windowSize)
   return req(`/clips/next?${p}`)
 }
 

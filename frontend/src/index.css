@@ -190,6 +190,21 @@ tbody td { padding: 10px 12px; vertical-align: middle; }
   align-items: center;
   flex-wrap: wrap;
 }
+.labeled-browser {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.labeled-browser-label {
+  font-size: 12px;
+  color: var(--text-1);
+  white-space: nowrap;
+}
+.labeled-browser select {
+  flex: 1;
+  min-width: 0;
+}
 
 .progress-counter {
   font-size: 13px;

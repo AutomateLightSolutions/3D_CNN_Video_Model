@@ -190,6 +190,7 @@ def extraction_log(match_id: int):
 def next_clip(
     match_id: Optional[int] = None,
     after_clip_id: Optional[int] = None,
+    window_size: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
     q = db.query(models.Clip).filter(models.Clip.status == "unlabeled")
@@ -197,6 +198,8 @@ def next_clip(
         q = q.filter(models.Clip.match_id == match_id)
     if after_clip_id:
         q = q.filter(models.Clip.id > after_clip_id)
+    if window_size:
+        q = q.filter(models.Clip.window_size == window_size)
     clip = q.order_by(models.Clip.id).first()
     if not clip:
         return None
