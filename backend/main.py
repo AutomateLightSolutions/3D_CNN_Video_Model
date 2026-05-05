@@ -4,6 +4,7 @@ import logging
 import os
 import signal
 import subprocess
+import sys
 from datetime import datetime
 from io import StringIO
 from pathlib import Path
@@ -301,7 +302,7 @@ def start_training():
 
     script = Path(__file__).parent / "trainer.py"
     cmd = [
-        "python", str(script),
+        sys.executable, str(script),
         "--data_dir", str(CLIPS_DIR),
         "--output_dir", str(MODEL_DIR),
         "--epochs", "40",
@@ -309,7 +310,38 @@ def start_training():
         "--lr", "1e-3",
         "--device", "cuda",
     ]
-    proc = subprocess.Popen(cmd, cwd=str(Path(__file__).parent))
+
+    # Redirect stdout+stderr into the log file so startup errors are visible
+    TRAINING_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    log_fh = open(TRAINING_LOG_PATH, "w", encoding="utf-8", buffering=1)
+
+    # On Windows: CREATE_NEW_PROCESS_GROUP isolates the process group and
+    # CREATE_NO_WINDOW detaches from the parent console entirely, preventing
+    # Windows console control events (close, Ctrl+C broadcast) from reaching
+    # uvicorn and triggering a clean shutdown.
+    # On POSIX: start_new_session=True calls setsid(), which gives the same isolation.
+    if sys.platform == "win32":
+        _launch_kwargs = {
+            "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW,
+        }
+    else:
+        _launch_kwargs = {"start_new_session": True}
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(Path(__file__).parent),
+            stdout=log_fh,
+            stderr=log_fh,
+            stdin=subprocess.DEVNULL,  # never inherit parent stdin
+            **_launch_kwargs,
+        )
+    except Exception as exc:
+        log_fh.write(f"ERROR: failed to launch trainer: {exc}\n")
+        log_fh.close()
+        raise HTTPException(status_code=500, detail=str(exc))
+    log_fh.close()  # parent closes its copy; child retains its inherited handle
+
     PID_FILE.write_text(str(proc.pid))
     return {"message": "Training started", "pid": proc.pid}
 

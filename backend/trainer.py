@@ -76,7 +76,7 @@ def main():
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
 
-    from config import DB_PATH, TRAINING_LOG_PATH, MODEL_DIR, HIGHLIGHT_CLASSES, WINDOW_CONFIG
+    from config import DB_PATH, MODEL_DIR, HIGHLIGHT_CLASSES, WINDOW_CONFIG
     from models import Clip, Label, Match
 
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
@@ -193,7 +193,14 @@ def main():
     class R3DHighlightModel(nn.Module):
         def __init__(self, num_classes: int):
             super().__init__()
-            backbone = r3d_18(weights=R3D_18_Weights.KINETICS400_V1)
+            try:
+                backbone = r3d_18(weights=R3D_18_Weights.KINETICS400_V1)
+                print("Loaded pretrained R3D-18 weights from cache.", flush=True)
+            except OSError as e:
+                # URLError (no internet / DNS failure) is a subclass of OSError
+                print(f"WARNING: could not load pretrained weights ({e})."
+                      " Training from random initialisation.", flush=True)
+                backbone = r3d_18(weights=None)
             self.backbone = nn.Sequential(*list(backbone.children())[:-1])
             self.class_head = nn.Linear(512, num_classes)
             self.score_head = nn.Sequential(nn.Linear(512, 1), nn.Sigmoid())
@@ -216,19 +223,15 @@ def main():
             torch.save(ckpt, output_dir / "best_model.pt")
 
     def handle_signal(sig, frame):
-        print("\nInterrupted — saving checkpoint...")
+        print("\nInterrupted — saving checkpoint...", flush=True)
         save_checkpoint(current_epoch[0], best_val_loss)
         sys.exit(0)
 
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
-    log_path = Path(TRAINING_LOG_PATH)
-    log_file = open(log_path, "w", buffering=1)
-
     def log(msg: str):
-        print(msg)
-        log_file.write(msg + "\n")
+        print(msg, flush=True)
 
     # Phase configuration
     PHASES = [
@@ -318,8 +321,7 @@ def main():
             best_val_loss = val_loss
             save_checkpoint(epoch, val_loss, is_best=True)
 
-    log_file.close()
-    print("Training complete.")
+    print("Training complete.", flush=True)
 
 
 if __name__ == "__main__":

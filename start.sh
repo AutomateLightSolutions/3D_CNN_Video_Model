@@ -18,7 +18,13 @@ fi
 echo "Using Python: $PYTHON"
 
 echo "Starting backend..."
-cd backend && $PYTHON -m uvicorn main:app --reload --port 8000 &
+cd backend && $PYTHON -m uvicorn main:app --reload --port 8000 \
+    --reload-exclude "*.log" \
+    --reload-exclude "*.db" \
+    --reload-exclude "*.pid" \
+    --reload-exclude "*.pt" \
+    --reload-exclude "*.csv" \
+    --reload-exclude "*.json" &
 BACKEND_PID=$!
 cd ..
 
