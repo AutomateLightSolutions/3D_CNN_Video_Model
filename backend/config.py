@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-BASE_DIR = Path(os.environ.get("APP_BASE_DIR", Path.home() / "highlight_system"))
+BASE_DIR = Path(os.environ.get("APP_BASE_DIR", Path(__file__).parent / "Storage"))
 CLIPS_DIR = BASE_DIR / "clips"
 MODEL_DIR = BASE_DIR / "models"
 EXPORT_DIR = BASE_DIR / "exports"
