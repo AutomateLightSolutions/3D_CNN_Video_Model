@@ -12,6 +12,7 @@ frontend (React + Vite)   →   backend (FastAPI)   →   trainer.py (PyTorch R3
 ```
 
 **Workflow:**
+
 1. Register a match video file
 2. Extract sliding-window clips (8s / 16s / 32s)
 3. Annotate each clip with an event class and highlight score
@@ -22,10 +23,10 @@ frontend (React + Vite)   →   backend (FastAPI)   →   trainer.py (PyTorch R3
 
 ## Prerequisites
 
-| Tool | Version |
-|------|---------|
-| Python | 3.11+ |
-| Node.js | 18+ |
+| Tool            | Version                |
+| --------------- | ---------------------- |
+| Python          | 3.11+                  |
+| Node.js         | 18+                    |
 | CUDA (optional) | 11.8+ for GPU training |
 
 ---
@@ -142,11 +143,12 @@ Open your browser at `http://localhost:5173`.
 **Training phases:**
 | Epochs | Backbone | Learning Rate |
 |--------|----------|---------------|
-| 1–10   | Frozen (heads only) | 1e-3 |
-| 11–30  | Partial (layer3 + layer4) | 1e-4 |
-| 31–40  | Full fine-tune | 1e-5 |
+| 1–10 | Frozen (heads only) | 1e-3 |
+| 11–30 | Partial (layer3 + layer4) | 1e-4 |
+| 31–40 | Full fine-tune | 1e-5 |
 
 Saved model checkpoints:
+
 - `~/highlight_system/models/best_model.pt` — lowest validation loss
 - `~/highlight_system/models/last_model.pt` — latest epoch
 
@@ -187,15 +189,15 @@ export APP_BASE_DIR=/data/highlight_system
 
 The model classifies 23 rugby event types:
 
-| Scoring | Set Pieces | Play | Discipline | Context |
-|---------|-----------|------|------------|---------|
-| try | scrum | tackle | red_card | replay |
-| conversion | lineout | ruck | yellow_card | tmo_review |
-| penalty_kick | | maul | penalty | normal_play |
-| drop_goal | | intercept | knock_on | |
-| near_try | | line_break | turnover | |
-| | | touch_kick | | |
-| | | cross_kick | | |
+| Scoring      | Set Pieces | Play       | Discipline  | Context     |
+| ------------ | ---------- | ---------- | ----------- | ----------- |
+| try          | scrum      | tackle     | red_card    | replay      |
+| conversion   | lineout    | ruck       | yellow_card | tmo_review  |
+| penalty_kick |            | maul       | penalty     | normal_play |
+| drop_goal    |            | intercept  | knock_on    |             |
+| near_try     |            | line_break | turnover    |             |
+|              |            | touch_kick |             |             |
+|              |            | cross_kick |             |             |
 
 ---
 
@@ -209,6 +211,7 @@ The trainer automatically uses CUDA if available, otherwise falls back to CPU:
 ```
 
 To force CPU training, edit the start command in `backend/main.py` line ~308:
+
 ```python
 "--device", "cpu",   # change from "cuda"
 ```
@@ -218,20 +221,25 @@ To force CPU training, edit the start command in `backend/main.py` line ~308:
 ## Troubleshooting
 
 **Backend fails to start**
+
 - Make sure the virtual environment is activated before running `uvicorn`
 - Check that port 8000 is not in use: `netstat -ano | findstr :8000`
 
 **Extraction stuck or no clips appear**
+
 - Verify FFmpeg is downloaded: check `backend/bin/ffmpeg.exe` exists
 - Check the extraction log in the UI (click the log icon next to the match)
 
 **Training won't start**
+
 - You need at least one labeled clip before training can begin
 - Check `~/highlight_system/training.log` for error messages
 
 **Frontend shows "Network Error"**
+
 - Make sure the backend is running on port 8000
 - Check the browser console for CORS errors
 
 **Out of memory during training**
+
 - Reduce batch size in `backend/main.py` line ~308: `"--batch_size", "2"`

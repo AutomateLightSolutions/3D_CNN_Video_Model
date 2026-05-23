@@ -87,7 +87,8 @@ export default function Annotate() {
     if (m) setMatchDuration(m.duration_seconds || 0);
   }, [matchId, matches]);
 
-  const windowSize = windowFilter !== "all" ? parseInt(windowFilter) : undefined;
+  const windowSize =
+    windowFilter !== "all" ? parseInt(windowFilter) : undefined;
 
   const refreshCounts = useCallback(async () => {
     if (!matchId) return;
@@ -276,8 +277,11 @@ export default function Annotate() {
                 <option value="">— pick a clip —</option>
                 {labeledClips.map((c) => (
                   <option key={c.id} value={c.id}>
-                    #{c.id} · {c.window_size}s · {c.t_start.toFixed(1)}s–{c.t_end.toFixed(1)}s
-                    {c.label ? ` · ${c.label.event_class} (${c.label.highlight_score.toFixed(2)})` : ""}
+                    #{c.id} · {c.window_size}s · {c.t_start.toFixed(1)}s–
+                    {c.t_end.toFixed(1)}s
+                    {c.label
+                      ? ` · ${c.label.event_class} (${c.label.highlight_score.toFixed(2)})`
+                      : ""}
                   </option>
                 ))}
               </select>
@@ -325,51 +329,37 @@ export default function Annotate() {
               <thead>
                 <tr>
                   <th>Score</th>
-                  <th>Rugby meaning</th>
+                  <th>Meaning</th>
                 </tr>
               </thead>
               <tbody>
                 <tr>
                   <td className="score-range score-range-6">0.85–1.00</td>
-                  <td>
-                    Try scored, especially from distance or after long phase
-                    play, first kick off
-                  </td>
+                  <td>Definitely Highlight</td>
                 </tr>
                 <tr>
                   <td className="score-range score-range-5">0.75–0.85</td>
-                  <td>
-                    Penalty goal, conversion, turnover leading directly to try
-                  </td>
+                  <td>Highly Likely Highlight</td>
                 </tr>
                 <tr>
                   <td className="score-range score-range-4">0.50–0.74</td>
-                  <td>
-                    Near try (held up), big breakdown win, yellow / red card
-                  </td>
+                  <td>Potential Highlight</td>
                 </tr>
                 <tr>
                   <td className="score-range score-range-3">0.30–0.49</td>
-                  <td>
-                    Scrum or lineout with significant outcome, penalty in
-                    dangerous position
-                  </td>
+                  <td>Significant Phase Play</td>
                 </tr>
                 <tr>
                   <td className="score-range score-range-2">0.15–0.29</td>
-                  <td>Maul, ruck, or tackle with significant outcome</td>
+                  <td>Minor Phase Event</td>
                 </tr>
                 <tr>
                   <td className="score-range score-range-1">0.05–0.14</td>
-                  <td>
-                    Routine phase play, reset scrum, standard lineout, Ruck
-                  </td>
+                  <td>Routine Play</td>
                 </tr>
                 <tr>
                   <td className="score-range score-range-0">0.00–0.04</td>
-                  <td>
-                    Normal Play, Dead ball, injury stoppage, nothing happening
-                  </td>
+                  <td>Low Chance to be a Highlight</td>
                 </tr>
               </tbody>
             </table>
