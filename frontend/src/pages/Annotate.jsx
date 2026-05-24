@@ -334,32 +334,38 @@ export default function Annotate() {
               </thead>
               <tbody>
                 <tr>
-                  <td className="score-range score-range-6">0.85–1.00</td>
-                  <td>Definitely Highlight</td>
+                  <td className="score-range score-range-6">0.90–1.00</td>
+                  <td>
+                    Try from distance, long phase build-up, first kick-off try
+                  </td>
                 </tr>
                 <tr>
-                  <td className="score-range score-range-5">0.75–0.85</td>
-                  <td>Highly Likely Highlight</td>
+                  <td className="score-range score-range-5">0.80–0.89</td>
+                  <td>Standard try, turnover → try</td>
                 </tr>
                 <tr>
-                  <td className="score-range score-range-4">0.50–0.74</td>
-                  <td>Potential Highlight</td>
+                  <td className="score-range score-range-3">0.50–0.79</td>
+                  <td>
+                    Conversion, penalty kick, near try, Yellow/red card, big
+                    scrum win, lineout → maul → try, kick off
+                  </td>
                 </tr>
                 <tr>
-                  <td className="score-range score-range-3">0.30–0.49</td>
-                  <td>Significant Phase Play</td>
+                  <td className="score-range score-range-2">0.30–0.49</td>
+                  <td>
+                    Scrum, lineout with clear outcome, breakdown turnover,
+                    Intercept, Penalty, line break
+                  </td>
                 </tr>
                 <tr>
-                  <td className="score-range score-range-2">0.15–0.29</td>
-                  <td>Minor Phase Event</td>
+                  <td className="score-range score-range-1">0.10–0.29</td>
+                  <td>
+                    Tackle, ruck, maul, Knock-on, Replay, TMO, Touch/Cross Kick
+                  </td>
                 </tr>
                 <tr>
-                  <td className="score-range score-range-1">0.05–0.14</td>
-                  <td>Routine Play</td>
-                </tr>
-                <tr>
-                  <td className="score-range score-range-0">0.00–0.04</td>
-                  <td>Low Chance to be a Highlight</td>
+                  <td className="score-range score-range-0">0.00–0.09</td>
+                  <td>Normal play, dead ball</td>
                 </tr>
               </tbody>
             </table>
