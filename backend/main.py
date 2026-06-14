@@ -5,7 +5,7 @@ import os
 import signal
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from io import StringIO
 from pathlib import Path
 from typing import List, Optional
@@ -20,17 +20,24 @@ import models
 import schemas
 from clip_extractor import run_extraction
 from config import (
-    CLIPS_DIR, MODEL_DIR, EXPORT_DIR,
-    TRAINING_LOG_PATH, PID_FILE,
+    CLIPS_DIR, EXPORT_DIR,
+    R3D_MODEL_DIR, VIDEOMAE_MODEL_DIR, SLOWFAST_MODEL_DIR,
+    R3D_LOG_PATH, VIDEOMAE_LOG_PATH, SLOWFAST_LOG_PATH,
+    R3D_PID_FILE, VIDEOMAE_PID_FILE, SLOWFAST_PID_FILE,
+    R3D_METRICS_PATH, VIDEOMAE_METRICS_PATH, SLOWFAST_METRICS_PATH,
     HIGHLIGHT_CLASSES, WINDOW_SIZES, WINDOW_CONFIG,
+    DB_PATH,
 )
 from database import Base, engine, get_db
 
 logger = logging.getLogger(__name__)
 
+_MATCH_NOT_FOUND = "Match not found"
+_CLIP_NOT_FOUND  = "Clip not found"
+
 Base.metadata.create_all(bind=engine)
 
-for _d in [CLIPS_DIR, MODEL_DIR, EXPORT_DIR]:
+for _d in [CLIPS_DIR, EXPORT_DIR, R3D_MODEL_DIR, VIDEOMAE_MODEL_DIR, SLOWFAST_MODEL_DIR]:
     _d.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="Highlight Annotation System")
@@ -109,6 +116,119 @@ def _match_out(match: models.Match, db: Session) -> schemas.MatchOut:
 
 
 # ---------------------------------------------------------------------------
+# Training helpers (shared logic for all 3 models)
+# ---------------------------------------------------------------------------
+
+def _launch_kwargs():
+    if sys.platform == "win32":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW}
+    return {"start_new_session": True}
+
+
+def _start_trainer(script_name: str, output_dir: Path, log_path: Path, pid_file: Path, cfg: schemas.TrainingConfig):
+    if pid_file.exists():
+        try:
+            pid = int(pid_file.read_text().strip())
+            os.kill(pid, 0)
+            return {"message": "Already running", "pid": pid}
+        except (ValueError, OSError):
+            pid_file.unlink(missing_ok=True)
+
+    script = Path(__file__).parent / script_name
+    cmd = [
+        sys.executable, str(script),
+        "--data_dir",   str(CLIPS_DIR),
+        "--output_dir", str(output_dir),
+        "--epochs",     str(cfg.epochs),
+        "--batch_size", str(cfg.batch_size),
+        "--lr",         str(cfg.lr),
+        "--device",     cfg.device,
+    ]
+
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_fh = open(log_path, "w", encoding="utf-8", buffering=1)
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(Path(__file__).parent),
+            stdout=log_fh,
+            stderr=log_fh,
+            stdin=subprocess.DEVNULL,
+            **_launch_kwargs(),
+        )
+    except Exception as exc:
+        log_fh.write(f"ERROR: failed to launch trainer: {exc}\n")
+        log_fh.close()
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    log_fh.close()
+    pid_file.write_text(str(proc.pid))
+    return {"message": "Training started", "pid": proc.pid}
+
+
+def _stop_trainer(pid_file: Path):
+    if not pid_file.exists():
+        return {"message": "No training process found"}
+    try:
+        pid = int(pid_file.read_text().strip())
+        os.kill(pid, signal.SIGTERM)
+        pid_file.unlink(missing_ok=True)
+        return {"message": "Stopped", "pid": pid}
+    except (ValueError, OSError):
+        pid_file.unlink(missing_ok=True)
+        return {"message": "Process not found, cleaned up"}
+
+
+def _trainer_status(pid_file: Path, log_path: Path) -> schemas.TrainingStatus:
+    running = False
+    if pid_file.exists():
+        try:
+            pid = int(pid_file.read_text().strip())
+            os.kill(pid, 0)
+            running = True
+        except (ValueError, OSError):
+            pid_file.unlink(missing_ok=True)
+
+    current_epoch = train_loss = val_loss = val_acc = None
+    if log_path.exists():
+        for line in reversed(log_path.read_text().splitlines()):
+            if line.startswith("EPOCH"):
+                parts = line.split()
+                try:
+                    current_epoch = int(parts[1])
+                    train_loss    = float(parts[3])
+                    val_loss      = float(parts[5])
+                    val_acc       = float(parts[7])
+                    break
+                except (IndexError, ValueError):
+                    pass
+
+    return schemas.TrainingStatus(
+        status="running" if running else "stopped",
+        current_epoch=current_epoch,
+        train_loss=train_loss,
+        val_loss=val_loss,
+        val_acc=val_acc,
+    )
+
+
+def _trainer_logs(log_path: Path):
+    if not log_path.exists():
+        return {"lines": []}
+    return {"lines": log_path.read_text().splitlines()[-100:]}
+
+
+def _trainer_metrics(metrics_path: Path):
+    if not metrics_path.exists():
+        return {}
+    try:
+        return json.loads(metrics_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+# ---------------------------------------------------------------------------
 # Matches
 # ---------------------------------------------------------------------------
 
@@ -134,7 +254,7 @@ def list_matches(db: Session = Depends(get_db)):
 def delete_match(match_id: int, db: Session = Depends(get_db)):
     match = db.query(models.Match).filter(models.Match.id == match_id).first()
     if not match:
-        raise HTTPException(status_code=404, detail="Match not found")
+        raise HTTPException(status_code=404, detail=_MATCH_NOT_FOUND)
     if match.status == "extracting":
         raise HTTPException(status_code=409, detail="Cannot delete while extraction is running")
     db.delete(match)
@@ -146,7 +266,7 @@ def delete_match(match_id: int, db: Session = Depends(get_db)):
 def extract_clips(match_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     match = db.query(models.Match).filter(models.Match.id == match_id).first()
     if not match:
-        raise HTTPException(status_code=404, detail="Match not found")
+        raise HTTPException(status_code=404, detail=_MATCH_NOT_FOUND)
     if match.status == "extracting":
         raise HTTPException(status_code=409, detail="Extraction already in progress")
     background_tasks.add_task(run_extraction, match_id)
@@ -157,18 +277,15 @@ def extract_clips(match_id: int, background_tasks: BackgroundTasks, db: Session 
 def extraction_progress(match_id: int, db: Session = Depends(get_db)):
     match = db.query(models.Match).filter(models.Match.id == match_id).first()
     if not match:
-        raise HTTPException(status_code=404, detail="Match not found")
-
+        raise HTTPException(status_code=404, detail=_MATCH_NOT_FOUND)
     if not match.duration_seconds:
         return schemas.ExtractionProgress(clips_total=0, clips_done=0)
-
     duration = match.duration_seconds
     total = 0
     for ws, cfg in WINDOW_CONFIG.items():
         stride = cfg["stride_s"]
         if duration >= ws:
             total += int((duration - ws) / stride) + 1
-
     done = db.query(models.Clip).filter(models.Clip.match_id == match_id).count()
     return schemas.ExtractionProgress(clips_total=total, clips_done=done)
 
@@ -228,7 +345,7 @@ def list_clips(
 def get_clip(clip_id: int, db: Session = Depends(get_db)):
     clip = db.query(models.Clip).filter(models.Clip.id == clip_id).first()
     if not clip:
-        raise HTTPException(status_code=404, detail="Clip not found")
+        raise HTTPException(status_code=404, detail=_CLIP_NOT_FOUND)
     return _clip_out(clip)
 
 
@@ -236,7 +353,7 @@ def get_clip(clip_id: int, db: Session = Depends(get_db)):
 def skip_clip(clip_id: int, db: Session = Depends(get_db)):
     clip = db.query(models.Clip).filter(models.Clip.id == clip_id).first()
     if not clip:
-        raise HTTPException(status_code=404, detail="Clip not found")
+        raise HTTPException(status_code=404, detail=_CLIP_NOT_FOUND)
     clip.status = "skipped"
     db.commit()
     return {"message": "Clip skipped"}
@@ -250,16 +367,16 @@ def skip_clip(clip_id: int, db: Session = Depends(get_db)):
 def create_or_update_label(body: schemas.LabelCreate, db: Session = Depends(get_db)):
     clip = db.query(models.Clip).filter(models.Clip.id == body.clip_id).first()
     if not clip:
-        raise HTTPException(status_code=404, detail="Clip not found")
+        raise HTTPException(status_code=404, detail=_CLIP_NOT_FOUND)
 
     existing = db.query(models.Label).filter(models.Label.clip_id == body.clip_id).first()
     if existing:
-        existing.event_class = body.event_class
-        existing.highlight_score = body.highlight_score
+        existing.event_class      = body.event_class
+        existing.highlight_score  = body.highlight_score
         existing.t_start_adjusted = body.t_start_adjusted
-        existing.t_end_adjusted = body.t_end_adjusted
-        existing.notes = body.notes
-        existing.updated_at = datetime.utcnow()
+        existing.t_end_adjusted   = body.t_end_adjusted
+        existing.notes            = body.notes
+        existing.updated_at       = datetime.now(timezone.utc)
         label = existing
     else:
         label = models.Label(
@@ -283,123 +400,94 @@ def list_labels(match_id: Optional[int] = None, db: Session = Depends(get_db)):
     q = db.query(models.Label)
     if match_id:
         q = q.join(models.Clip).filter(models.Clip.match_id == match_id)
-    return [_label_out(l) for l in q.all()]
+    return [_label_out(lbl) for lbl in q.all()]
 
 
 # ---------------------------------------------------------------------------
-# Training
+# Training — R3D-18
 # ---------------------------------------------------------------------------
 
-@app.post("/training/start")
-def start_training():
-    if PID_FILE.exists():
-        try:
-            pid = int(PID_FILE.read_text().strip())
-            os.kill(pid, 0)
-            return {"message": "Already running", "pid": pid}
-        except (ProcessLookupError, ValueError, OSError):
-            PID_FILE.unlink(missing_ok=True)
-
-    script = Path(__file__).parent / "trainer.py"
-    cmd = [
-        sys.executable, str(script),
-        "--data_dir", str(CLIPS_DIR),
-        "--output_dir", str(MODEL_DIR),
-        "--epochs", "40",
-        "--batch_size", "4",
-        "--lr", "1e-3",
-        "--device", "cuda",
-    ]
-
-    # Redirect stdout+stderr into the log file so startup errors are visible
-    TRAINING_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    log_fh = open(TRAINING_LOG_PATH, "w", encoding="utf-8", buffering=1)
-
-    # On Windows: CREATE_NEW_PROCESS_GROUP isolates the process group and
-    # CREATE_NO_WINDOW detaches from the parent console entirely, preventing
-    # Windows console control events (close, Ctrl+C broadcast) from reaching
-    # uvicorn and triggering a clean shutdown.
-    # On POSIX: start_new_session=True calls setsid(), which gives the same isolation.
-    if sys.platform == "win32":
-        _launch_kwargs = {
-            "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW,
-        }
-    else:
-        _launch_kwargs = {"start_new_session": True}
-
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            cwd=str(Path(__file__).parent),
-            stdout=log_fh,
-            stderr=log_fh,
-            stdin=subprocess.DEVNULL,  # never inherit parent stdin
-            **_launch_kwargs,
-        )
-    except Exception as exc:
-        log_fh.write(f"ERROR: failed to launch trainer: {exc}\n")
-        log_fh.close()
-        raise HTTPException(status_code=500, detail=str(exc))
-    log_fh.close()  # parent closes its copy; child retains its inherited handle
-
-    PID_FILE.write_text(str(proc.pid))
-    return {"message": "Training started", "pid": proc.pid}
+@app.post("/training/r3d/start")
+def start_r3d_training(cfg: schemas.TrainingConfig = schemas.TrainingConfig()):
+    return _start_trainer("trainer_r3d.py", R3D_MODEL_DIR, R3D_LOG_PATH, R3D_PID_FILE, cfg)
 
 
-@app.post("/training/stop")
-def stop_training():
-    if not PID_FILE.exists():
-        return {"message": "No training process found"}
-    try:
-        pid = int(PID_FILE.read_text().strip())
-        os.kill(pid, signal.SIGTERM)
-        PID_FILE.unlink(missing_ok=True)
-        return {"message": "Stopped", "pid": pid}
-    except (ProcessLookupError, ValueError, OSError):
-        PID_FILE.unlink(missing_ok=True)
-        return {"message": "Process not found, cleaned up"}
+@app.post("/training/r3d/stop")
+def stop_r3d_training():
+    return _stop_trainer(R3D_PID_FILE)
 
 
-@app.get("/training/status", response_model=schemas.TrainingStatus)
-def training_status():
-    running = False
-    if PID_FILE.exists():
-        try:
-            pid = int(PID_FILE.read_text().strip())
-            os.kill(pid, 0)
-            running = True
-        except (ProcessLookupError, ValueError, OSError):
-            PID_FILE.unlink(missing_ok=True)
-
-    current_epoch = train_loss = val_loss = val_acc = None
-    if TRAINING_LOG_PATH.exists():
-        for line in reversed(TRAINING_LOG_PATH.read_text().splitlines()):
-            if line.startswith("EPOCH"):
-                parts = line.split()
-                try:
-                    current_epoch = int(parts[1])
-                    train_loss = float(parts[3])
-                    val_loss = float(parts[5])
-                    val_acc = float(parts[7])
-                    break
-                except (IndexError, ValueError):
-                    pass
-
-    return schemas.TrainingStatus(
-        status="running" if running else "stopped",
-        current_epoch=current_epoch,
-        train_loss=train_loss,
-        val_loss=val_loss,
-        val_acc=val_acc,
-    )
+@app.get("/training/r3d/status", response_model=schemas.TrainingStatus)
+def r3d_training_status():
+    return _trainer_status(R3D_PID_FILE, R3D_LOG_PATH)
 
 
-@app.get("/training/logs")
-def training_logs():
-    if not TRAINING_LOG_PATH.exists():
-        return {"lines": []}
-    lines = TRAINING_LOG_PATH.read_text().splitlines()
-    return {"lines": lines[-100:]}
+@app.get("/training/r3d/logs")
+def r3d_training_logs():
+    return _trainer_logs(R3D_LOG_PATH)
+
+
+@app.get("/training/r3d/metrics")
+def r3d_training_metrics():
+    return _trainer_metrics(R3D_METRICS_PATH)
+
+
+# ---------------------------------------------------------------------------
+# Training — VideoMAE
+# ---------------------------------------------------------------------------
+
+@app.post("/training/videomae/start")
+def start_videomae_training(cfg: schemas.TrainingConfig = schemas.TrainingConfig(epochs=20, batch_size=2)):
+    return _start_trainer("trainer_videomae.py", VIDEOMAE_MODEL_DIR, VIDEOMAE_LOG_PATH, VIDEOMAE_PID_FILE, cfg)
+
+
+@app.post("/training/videomae/stop")
+def stop_videomae_training():
+    return _stop_trainer(VIDEOMAE_PID_FILE)
+
+
+@app.get("/training/videomae/status", response_model=schemas.TrainingStatus)
+def videomae_training_status():
+    return _trainer_status(VIDEOMAE_PID_FILE, VIDEOMAE_LOG_PATH)
+
+
+@app.get("/training/videomae/logs")
+def videomae_training_logs():
+    return _trainer_logs(VIDEOMAE_LOG_PATH)
+
+
+@app.get("/training/videomae/metrics")
+def videomae_training_metrics():
+    return _trainer_metrics(VIDEOMAE_METRICS_PATH)
+
+
+# ---------------------------------------------------------------------------
+# Training — SlowFast
+# ---------------------------------------------------------------------------
+
+@app.post("/training/slowfast/start")
+def start_slowfast_training(cfg: schemas.TrainingConfig = schemas.TrainingConfig(epochs=30, batch_size=2)):
+    return _start_trainer("trainer_slowfast.py", SLOWFAST_MODEL_DIR, SLOWFAST_LOG_PATH, SLOWFAST_PID_FILE, cfg)
+
+
+@app.post("/training/slowfast/stop")
+def stop_slowfast_training():
+    return _stop_trainer(SLOWFAST_PID_FILE)
+
+
+@app.get("/training/slowfast/status", response_model=schemas.TrainingStatus)
+def slowfast_training_status():
+    return _trainer_status(SLOWFAST_PID_FILE, SLOWFAST_LOG_PATH)
+
+
+@app.get("/training/slowfast/logs")
+def slowfast_training_logs():
+    return _trainer_logs(SLOWFAST_LOG_PATH)
+
+
+@app.get("/training/slowfast/metrics")
+def slowfast_training_metrics():
+    return _trainer_metrics(SLOWFAST_METRICS_PATH)
 
 
 # ---------------------------------------------------------------------------
@@ -460,18 +548,14 @@ def export_csv(db: Session = Depends(get_db)):
     )
 
 
-# ---------------------------------------------------------------------------
-# Stats helper used by Export page
-# ---------------------------------------------------------------------------
-
 @app.get("/export/stats")
 def export_stats(db: Session = Depends(get_db)):
-    total = db.query(models.Clip).count()
-    labeled = db.query(models.Clip).filter(models.Clip.status == "labeled").count()
-    skipped = db.query(models.Clip).filter(models.Clip.status == "skipped").count()
+    total    = db.query(models.Clip).count()
+    labeled  = db.query(models.Clip).filter(models.Clip.status == "labeled").count()
+    skipped  = db.query(models.Clip).filter(models.Clip.status == "skipped").count()
     unlabeled = total - labeled - skipped
 
-    class_counts: dict = {cls: 0 for cls in HIGHLIGHT_CLASSES}
+    class_counts: dict = dict.fromkeys(HIGHLIGHT_CLASSES, 0)
     for lbl in db.query(models.Label).all():
         if lbl.event_class in class_counts:
             class_counts[lbl.event_class] += 1
@@ -491,10 +575,7 @@ def export_stats(db: Session = Depends(get_db)):
             bins["0.8-1.0"] += 1
 
     return {
-        "total": total,
-        "labeled": labeled,
-        "skipped": skipped,
-        "unlabeled": unlabeled,
-        "class_counts": class_counts,
-        "score_bins": bins,
+        "total": total, "labeled": labeled,
+        "skipped": skipped, "unlabeled": unlabeled,
+        "class_counts": class_counts, "score_bins": bins,
     }

@@ -70,3 +70,10 @@ class TrainingStatus(BaseModel):
     train_loss: Optional[float] = None
     val_loss: Optional[float] = None
     val_acc: Optional[float] = None
+
+
+class TrainingConfig(BaseModel):
+    epochs: int = 40
+    batch_size: int = 4
+    lr: float = 1e-3
+    device: str = "cuda"

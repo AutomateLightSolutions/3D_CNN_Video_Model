@@ -12,23 +12,19 @@ async function req(path, options = {}) {
   return res
 }
 
+const json = (body) => ({
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body),
+})
+
 // --- Matches ---
-export const createMatch = (name, file_path) =>
-  req('/matches', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, file_path }) })
-
-export const listMatches = () => req('/matches')
-
-export const extractClips = (id) =>
-  req(`/matches/${id}/extract`, { method: 'POST' })
-
-export const deleteMatch = (id) =>
-  req(`/matches/${id}`, { method: 'DELETE' })
-
-export const getExtractionProgress = (id) =>
-  req(`/matches/${id}/progress`)
-
-export const getExtractionLog = (id) =>
-  req(`/matches/${id}/extraction-log`)
+export const createMatch    = (name, file_path) => req('/matches', json({ name, file_path }))
+export const listMatches    = ()                 => req('/matches')
+export const extractClips   = (id)              => req(`/matches/${id}/extract`, { method: 'POST' })
+export const deleteMatch    = (id)              => req(`/matches/${id}`, { method: 'DELETE' })
+export const getExtractionProgress = (id)       => req(`/matches/${id}/progress`)
+export const getExtractionLog      = (id)       => req(`/matches/${id}/extraction-log`)
 
 // --- Clips ---
 export const listClips = ({ matchId, status, windowSize } = {}) => {
@@ -38,48 +34,61 @@ export const listClips = ({ matchId, status, windowSize } = {}) => {
   if (windowSize) p.set('window_size', windowSize)
   return req(`/clips?${p}`)
 }
-
-export const getClip = (id) => req(`/clips/${id}`)
-
+export const getClip     = (id)                              => req(`/clips/${id}`)
 export const getNextClip = ({ matchId, afterClipId, windowSize } = {}) => {
   const p = new URLSearchParams()
-  if (matchId)    p.set('match_id', matchId)
+  if (matchId)     p.set('match_id', matchId)
   if (afterClipId) p.set('after_clip_id', afterClipId)
   if (windowSize)  p.set('window_size', windowSize)
   return req(`/clips/next?${p}`)
 }
-
-export const skipClip = (id) =>
-  req(`/clips/${id}/skip`, { method: 'POST' })
+export const skipClip = (id) => req(`/clips/${id}/skip`, { method: 'POST' })
 
 // --- Labels ---
-export const saveLabel = (payload) =>
-  req('/labels', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
-
+export const saveLabel  = (payload) => req('/labels', json(payload))
 export const listLabels = (matchId) => {
   const p = new URLSearchParams()
   if (matchId) p.set('match_id', matchId)
   return req(`/labels?${p}`)
 }
 
-// --- Training ---
-export const startTraining = () =>
-  req('/training/start', { method: 'POST' })
+// --- Training helpers (internal) ---
+function trainingApi(model) {
+  const base = `/training/${model}`
+  return {
+    start:   (cfg = {}) => req(`${base}/start`,   json(cfg)),
+    stop:    ()         => req(`${base}/stop`,     { method: 'POST' }),
+    status:  ()         => req(`${base}/status`),
+    logs:    ()         => req(`${base}/logs`),
+    metrics: ()         => req(`${base}/metrics`),
+  }
+}
 
-export const stopTraining = () =>
-  req('/training/stop', { method: 'POST' })
+// --- Training — R3D-18 ---
+const _r3d = trainingApi('r3d')
+export const startR3DTraining    = (cfg) => _r3d.start(cfg)
+export const stopR3DTraining     = ()    => _r3d.stop()
+export const getR3DTrainingStatus  = ()  => _r3d.status()
+export const getR3DTrainingLogs    = ()  => _r3d.logs()
+export const getR3DTrainingMetrics = ()  => _r3d.metrics()
 
-export const getTrainingStatus = () => req('/training/status')
+// --- Training — VideoMAE ---
+const _videomae = trainingApi('videomae')
+export const startVideoMAETraining    = (cfg) => _videomae.start(cfg)
+export const stopVideoMAETraining     = ()    => _videomae.stop()
+export const getVideoMAETrainingStatus  = ()  => _videomae.status()
+export const getVideoMAETrainingLogs    = ()  => _videomae.logs()
+export const getVideoMAETrainingMetrics = ()  => _videomae.metrics()
 
-export const getTrainingLogs = () => req('/training/logs')
+// --- Training — SlowFast ---
+const _slowfast = trainingApi('slowfast')
+export const startSlowFastTraining    = (cfg) => _slowfast.start(cfg)
+export const stopSlowFastTraining     = ()    => _slowfast.stop()
+export const getSlowFastTrainingStatus  = ()  => _slowfast.status()
+export const getSlowFastTrainingLogs    = ()  => _slowfast.logs()
+export const getSlowFastTrainingMetrics = ()  => _slowfast.metrics()
 
 // --- Export ---
 export const getExportStats = () => req('/export/stats')
-
-export const downloadJson = () => {
-  window.location.href = `${BASE}/export/json`
-}
-
-export const downloadCsv = () => {
-  window.location.href = `${BASE}/export/csv`
-}
+export const downloadJson   = () => { globalThis.location.href = `${BASE}/export/json` }
+export const downloadCsv    = () => { globalThis.location.href = `${BASE}/export/csv` }

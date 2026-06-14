@@ -3,11 +3,38 @@ from pathlib import Path
 
 BASE_DIR = Path(os.environ.get("APP_BASE_DIR", Path(__file__).parent / "Storage"))
 CLIPS_DIR = BASE_DIR / "clips"
-MODEL_DIR = BASE_DIR / "models"
 EXPORT_DIR = BASE_DIR / "exports"
 DB_PATH = BASE_DIR / "labels.db"
-TRAINING_LOG_PATH = BASE_DIR / "training.log"
-PID_FILE = BASE_DIR / "trainer.pid"
+
+# Per-model output directories
+R3D_MODEL_DIR      = BASE_DIR / "models" / "r3d"
+VIDEOMAE_MODEL_DIR = BASE_DIR / "models" / "videomae"
+SLOWFAST_MODEL_DIR = BASE_DIR / "models" / "slowfast"
+
+# Backward-compat alias used by existing code
+MODEL_DIR = R3D_MODEL_DIR
+
+# Per-model training log paths
+R3D_LOG_PATH      = BASE_DIR / "r3d_training.log"
+VIDEOMAE_LOG_PATH = BASE_DIR / "videomae_training.log"
+SLOWFAST_LOG_PATH = BASE_DIR / "slowfast_training.log"
+
+# Backward-compat alias
+TRAINING_LOG_PATH = R3D_LOG_PATH
+
+# Per-model PID files (one running process per model)
+R3D_PID_FILE      = BASE_DIR / "r3d_trainer.pid"
+VIDEOMAE_PID_FILE = BASE_DIR / "videomae_trainer.pid"
+SLOWFAST_PID_FILE = BASE_DIR / "slowfast_trainer.pid"
+
+# Backward-compat alias
+PID_FILE = R3D_PID_FILE
+
+# Per-model metrics files (written each epoch by trainer)
+_METRICS_FILENAME     = "metrics.json"
+R3D_METRICS_PATH      = R3D_MODEL_DIR / _METRICS_FILENAME
+VIDEOMAE_METRICS_PATH = VIDEOMAE_MODEL_DIR / _METRICS_FILENAME
+SLOWFAST_METRICS_PATH = SLOWFAST_MODEL_DIR / _METRICS_FILENAME
 
 HIGHLIGHT_CLASSES = [
     "try", "conversion", "kick_off", "penalty_kick", "drop_goal",
@@ -17,18 +44,15 @@ HIGHLIGHT_CLASSES = [
     "replay", "tmo_review", "normal_play"
 ]
 
-# Classes that inherit score from parent event — used in UI logic
 CONTEXT_CLASSES = ["replay", "tmo_review"]
 
-# Window config: window_size_s -> {frames, stride_s}
 WINDOW_CONFIG = {
     8:  {"frames": 16, "stride_s": 4},
     16: {"frames": 32, "stride_s": 8},
     32: {"frames": 48, "stride_s": 16},
 }
 
-WINDOW_SIZES = [8, 16, 32]  # seconds
+WINDOW_SIZES = [8, 16, 32]
 
-# Keep for backward compat
 CLIP_FPS = 25
 CLIP_RESOLUTION = 224
