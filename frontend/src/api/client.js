@@ -88,6 +88,35 @@ export const getSlowFastTrainingStatus  = ()  => _slowfast.status()
 export const getSlowFastTrainingLogs    = ()  => _slowfast.logs()
 export const getSlowFastTrainingMetrics = ()  => _slowfast.metrics()
 
+// --- Training — Interpretable + RF ---
+const _rf = trainingApi('rf')
+export const startRFTraining    = (cfg) => _rf.start(cfg)
+export const stopRFTraining     = ()    => _rf.stop()
+export const getRFTrainingStatus  = ()  => _rf.status()
+export const getRFTrainingLogs    = ()  => _rf.logs()
+export const getRFTrainingMetrics = ()  => _rf.metrics()
+
+// --- Training — Interpretable + MLP ---
+const _mlp = trainingApi('mlp')
+export const startMLPTraining    = (cfg) => _mlp.start(cfg)
+export const stopMLPTraining     = ()    => _mlp.stop()
+export const getMLPTrainingStatus  = ()  => _mlp.status()
+export const getMLPTrainingLogs    = ()  => _mlp.logs()
+export const getMLPTrainingMetrics = ()  => _mlp.metrics()
+
+// --- Training — Interpretable + Deep Hybrid ---
+const _hybrid = trainingApi('hybrid')
+export const startHybridTraining    = (cfg) => _hybrid.start(cfg)
+export const stopHybridTraining     = ()    => _hybrid.stop()
+export const getHybridTrainingStatus  = ()  => _hybrid.status()
+export const getHybridTrainingLogs    = ()  => _hybrid.logs()
+export const getHybridTrainingMetrics = ()  => _hybrid.metrics()
+
+// --- Feature Extraction ---
+export const startFeatureExtraction     = ()  => req('/features/extract', { method: 'POST' })
+export const getFeatureExtractionStatus = ()  => req('/features/status')
+export const getFeatureExtractionLogs   = ()  => req('/features/logs')
+
 // --- Export ---
 export const getExportStats = () => req('/export/stats')
 export const downloadJson   = () => { globalThis.location.href = `${BASE}/export/json` }

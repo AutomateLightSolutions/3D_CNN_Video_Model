@@ -77,3 +77,4 @@ class TrainingConfig(BaseModel):
     batch_size: int = 4
     lr: float = 1e-3
     device: str = "cuda"
+    backbone: str = "r3d"  # for trainer_hybrid: "r3d" | "videomae" | "slowfast"

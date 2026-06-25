@@ -67,7 +67,37 @@ function PerClassF1Table({ perClassF1 }) {
   )
 }
 
-export default function TrainingPage({ title, defaultEpochs, defaultBatch, api }) {
+function FeatureImportanceTable({ importance }) {
+  if (!importance || Object.keys(importance).length === 0) return null
+  const entries = Object.entries(importance).sort((a, b) => b[1] - a[1]).slice(0, 15)
+  const maxVal = entries[0]?.[1] || 1
+  return (
+    <div className="card">
+      <h2>Feature Importance (Top 15)</h2>
+      <table className="score-guide-table">
+        <thead>
+          <tr><th>Feature</th><th>Importance</th><th>Bar</th></tr>
+        </thead>
+        <tbody>
+          {entries.map(([feat, imp]) => (
+            <tr key={feat}>
+              <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{feat.replace(/_/g, ' ')}</td>
+              <td>{(imp * 100).toFixed(1)}%</td>
+              <td style={{ width: 140 }}>
+                <div style={{
+                  height: 8, borderRadius: 4,
+                  background: `linear-gradient(to right, #a855f7 ${(imp / maxVal * 100).toFixed(0)}%, var(--surface-2) ${(imp / maxVal * 100).toFixed(0)}%)`,
+                }} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+export default function TrainingPage({ title, defaultEpochs, defaultBatch, api, extraControls }) {
   const [epochs,    setEpochs]    = useState(defaultEpochs)
   const [batchSize, setBatchSize] = useState(defaultBatch)
   const [lr,        setLr]        = useState('1e-3')
@@ -238,6 +268,7 @@ export default function TrainingPage({ title, defaultEpochs, defaultBatch, api }
               <option value="cpu">CPU</option>
             </select>
           </div>
+          {extraControls}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span className={`badge ${isRunning ? 'badge-green' : 'badge-gray'}`}>
               {isRunning ? 'Running' : (metrics?.status === 'done' ? 'Done' : 'Stopped')}
@@ -302,6 +333,7 @@ export default function TrainingPage({ title, defaultEpochs, defaultBatch, api }
       </div>
 
       <PerClassF1Table perClassF1={metrics?.per_class_f1} />
+      <FeatureImportanceTable importance={metrics?.feature_importance} />
     </div>
   )
 }

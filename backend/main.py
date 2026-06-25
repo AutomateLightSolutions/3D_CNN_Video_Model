@@ -25,6 +25,10 @@ from config import (
     R3D_LOG_PATH, VIDEOMAE_LOG_PATH, SLOWFAST_LOG_PATH,
     R3D_PID_FILE, VIDEOMAE_PID_FILE, SLOWFAST_PID_FILE,
     R3D_METRICS_PATH, VIDEOMAE_METRICS_PATH, SLOWFAST_METRICS_PATH,
+    RF_MODEL_DIR, RF_LOG_PATH, RF_PID_FILE, RF_METRICS_PATH,
+    MLP_MODEL_DIR, MLP_LOG_PATH, MLP_PID_FILE, MLP_METRICS_PATH,
+    HYBRID_MODEL_DIR, HYBRID_LOG_PATH, HYBRID_PID_FILE, HYBRID_METRICS_PATH,
+    FEATURES_DIR, FEATURES_PROGRESS,
     HIGHLIGHT_CLASSES, WINDOW_SIZES, WINDOW_CONFIG,
     DB_PATH,
 )
@@ -37,7 +41,12 @@ _CLIP_NOT_FOUND  = "Clip not found"
 
 Base.metadata.create_all(bind=engine)
 
-for _d in [CLIPS_DIR, EXPORT_DIR, R3D_MODEL_DIR, VIDEOMAE_MODEL_DIR, SLOWFAST_MODEL_DIR]:
+for _d in [
+    CLIPS_DIR, EXPORT_DIR,
+    R3D_MODEL_DIR, VIDEOMAE_MODEL_DIR, SLOWFAST_MODEL_DIR,
+    RF_MODEL_DIR, MLP_MODEL_DIR, HYBRID_MODEL_DIR,
+    FEATURES_DIR,
+]:
     _d.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="Highlight Annotation System")
@@ -125,7 +134,7 @@ def _launch_kwargs():
     return {"start_new_session": True}
 
 
-def _start_trainer(script_name: str, output_dir: Path, log_path: Path, pid_file: Path, cfg: schemas.TrainingConfig):
+def _start_trainer(script_name: str, output_dir: Path, log_path: Path, pid_file: Path, cfg: schemas.TrainingConfig, extra_args: list = None):
     if pid_file.exists():
         try:
             pid = int(pid_file.read_text().strip())
@@ -144,6 +153,8 @@ def _start_trainer(script_name: str, output_dir: Path, log_path: Path, pid_file:
         "--lr",         str(cfg.lr),
         "--device",     cfg.device,
     ]
+    if extra_args:
+        cmd.extend(extra_args)
 
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_fh = open(log_path, "w", encoding="utf-8", buffering=1)
@@ -488,6 +499,166 @@ def slowfast_training_logs():
 @app.get("/training/slowfast/metrics")
 def slowfast_training_metrics():
     return _trainer_metrics(SLOWFAST_METRICS_PATH)
+
+
+# ---------------------------------------------------------------------------
+# Feature Extraction (prerequisite for RF / MLP / Hybrid trainers)
+# ---------------------------------------------------------------------------
+
+_FEATURE_PID_FILE = FEATURES_DIR / "extractor.pid"
+_FEATURE_LOG_PATH = FEATURES_DIR / "extractor.log"
+
+
+@app.post("/features/extract")
+def start_feature_extraction():
+    if _FEATURE_PID_FILE.exists():
+        try:
+            pid = int(_FEATURE_PID_FILE.read_text().strip())
+            os.kill(pid, 0)
+            return {"message": "Already running", "pid": pid}
+        except (ValueError, OSError):
+            _FEATURE_PID_FILE.unlink(missing_ok=True)
+
+    script = Path(__file__).parent / "feature_extractor.py"
+    cmd = [
+        sys.executable, str(script),
+        "--output_dir", str(FEATURES_DIR),
+    ]
+
+    _FEATURE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    log_fh = open(_FEATURE_LOG_PATH, "w", encoding="utf-8", buffering=1)
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(Path(__file__).parent),
+            stdout=log_fh, stderr=log_fh,
+            stdin=subprocess.DEVNULL,
+            **_launch_kwargs(),
+        )
+    except Exception as exc:
+        log_fh.close()
+        raise HTTPException(status_code=500, detail=str(exc))
+    log_fh.close()
+    _FEATURE_PID_FILE.write_text(str(proc.pid))
+    return {"message": "Feature extraction started", "pid": proc.pid}
+
+
+@app.get("/features/status")
+def feature_extraction_status():
+    running = False
+    if _FEATURE_PID_FILE.exists():
+        try:
+            pid = int(_FEATURE_PID_FILE.read_text().strip())
+            os.kill(pid, 0)
+            running = True
+        except (ValueError, OSError):
+            _FEATURE_PID_FILE.unlink(missing_ok=True)
+
+    progress = {"total": 0, "done": 0, "status": "idle"}
+    if FEATURES_PROGRESS.exists():
+        try:
+            progress = json.loads(FEATURES_PROGRESS.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    if running:
+        progress["status"] = "running"
+    return progress
+
+
+@app.get("/features/logs")
+def feature_extraction_logs():
+    return _trainer_logs(_FEATURE_LOG_PATH)
+
+
+# ---------------------------------------------------------------------------
+# Training — Interpretable Features + Random Forest
+# ---------------------------------------------------------------------------
+
+@app.post("/training/rf/start")
+def start_rf_training(cfg: schemas.TrainingConfig = schemas.TrainingConfig(epochs=10, batch_size=0)):
+    return _start_trainer("trainer_rf.py", RF_MODEL_DIR, RF_LOG_PATH, RF_PID_FILE, cfg)
+
+
+@app.post("/training/rf/stop")
+def stop_rf_training():
+    return _stop_trainer(RF_PID_FILE)
+
+
+@app.get("/training/rf/status", response_model=schemas.TrainingStatus)
+def rf_training_status():
+    return _trainer_status(RF_PID_FILE, RF_LOG_PATH)
+
+
+@app.get("/training/rf/logs")
+def rf_training_logs():
+    return _trainer_logs(RF_LOG_PATH)
+
+
+@app.get("/training/rf/metrics")
+def rf_training_metrics():
+    return _trainer_metrics(RF_METRICS_PATH)
+
+
+# ---------------------------------------------------------------------------
+# Training — Interpretable Features + MLP
+# ---------------------------------------------------------------------------
+
+@app.post("/training/mlp/start")
+def start_mlp_training(cfg: schemas.TrainingConfig = schemas.TrainingConfig(epochs=30, batch_size=32)):
+    return _start_trainer("trainer_mlp.py", MLP_MODEL_DIR, MLP_LOG_PATH, MLP_PID_FILE, cfg)
+
+
+@app.post("/training/mlp/stop")
+def stop_mlp_training():
+    return _stop_trainer(MLP_PID_FILE)
+
+
+@app.get("/training/mlp/status", response_model=schemas.TrainingStatus)
+def mlp_training_status():
+    return _trainer_status(MLP_PID_FILE, MLP_LOG_PATH)
+
+
+@app.get("/training/mlp/logs")
+def mlp_training_logs():
+    return _trainer_logs(MLP_LOG_PATH)
+
+
+@app.get("/training/mlp/metrics")
+def mlp_training_metrics():
+    return _trainer_metrics(MLP_METRICS_PATH)
+
+
+# ---------------------------------------------------------------------------
+# Training — Interpretable + Deep Features Hybrid
+# ---------------------------------------------------------------------------
+
+@app.post("/training/hybrid/start")
+def start_hybrid_training(cfg: schemas.TrainingConfig = schemas.TrainingConfig(epochs=30, batch_size=32)):
+    return _start_trainer(
+        "trainer_hybrid.py", HYBRID_MODEL_DIR, HYBRID_LOG_PATH, HYBRID_PID_FILE, cfg,
+        extra_args=["--backbone", cfg.backbone],
+    )
+
+
+@app.post("/training/hybrid/stop")
+def stop_hybrid_training():
+    return _stop_trainer(HYBRID_PID_FILE)
+
+
+@app.get("/training/hybrid/status", response_model=schemas.TrainingStatus)
+def hybrid_training_status():
+    return _trainer_status(HYBRID_PID_FILE, HYBRID_LOG_PATH)
+
+
+@app.get("/training/hybrid/logs")
+def hybrid_training_logs():
+    return _trainer_logs(HYBRID_LOG_PATH)
+
+
+@app.get("/training/hybrid/metrics")
+def hybrid_training_metrics():
+    return _trainer_metrics(HYBRID_METRICS_PATH)
 
 
 # ---------------------------------------------------------------------------

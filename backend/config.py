@@ -36,6 +36,28 @@ R3D_METRICS_PATH      = R3D_MODEL_DIR / _METRICS_FILENAME
 VIDEOMAE_METRICS_PATH = VIDEOMAE_MODEL_DIR / _METRICS_FILENAME
 SLOWFAST_METRICS_PATH = SLOWFAST_MODEL_DIR / _METRICS_FILENAME
 
+# Interpretable feature cache
+FEATURES_DIR      = BASE_DIR / "features"
+FEATURES_PROGRESS = FEATURES_DIR / "progress.json"
+
+# Interpretable Features + Random Forest
+RF_MODEL_DIR   = BASE_DIR / "models" / "rf"
+RF_LOG_PATH    = BASE_DIR / "rf_training.log"
+RF_METRICS_PATH = RF_MODEL_DIR / _METRICS_FILENAME
+RF_PID_FILE    = BASE_DIR / "rf_trainer.pid"
+
+# Interpretable Features + MLP
+MLP_MODEL_DIR    = BASE_DIR / "models" / "mlp"
+MLP_LOG_PATH     = BASE_DIR / "mlp_training.log"
+MLP_METRICS_PATH = MLP_MODEL_DIR / _METRICS_FILENAME
+MLP_PID_FILE     = BASE_DIR / "mlp_trainer.pid"
+
+# Interpretable + Deep Features Hybrid
+HYBRID_MODEL_DIR    = BASE_DIR / "models" / "hybrid"
+HYBRID_LOG_PATH     = BASE_DIR / "hybrid_training.log"
+HYBRID_METRICS_PATH = HYBRID_MODEL_DIR / _METRICS_FILENAME
+HYBRID_PID_FILE     = BASE_DIR / "hybrid_trainer.pid"
+
 HIGHLIGHT_CLASSES = [
     "try", "conversion", "kick_off", "penalty_kick", "drop_goal",
     "near_try", "scrum", "lineout", "touch_kick", "intercept",
