@@ -227,7 +227,7 @@ def _trainer_status(pid_file: Path, log_path: Path) -> schemas.TrainingStatus:
 def _trainer_logs(log_path: Path):
     if not log_path.exists():
         return {"lines": []}
-    return {"lines": log_path.read_text().splitlines()[-100:]}
+    return {"lines": log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-100:]}
 
 
 def _trainer_metrics(metrics_path: Path):
@@ -561,9 +561,17 @@ def feature_extraction_status():
         except (json.JSONDecodeError, OSError):
             pass
 
-    if running:
+    if progress.get("status") == "done":
+        # Process finished — clean up stale PID file if present
+        _FEATURE_PID_FILE.unlink(missing_ok=True)
+    elif running:
         progress["status"] = "running"
     return progress
+
+
+@app.post("/features/stop")
+def stop_feature_extraction():
+    return _stop_trainer(_FEATURE_PID_FILE)
 
 
 @app.get("/features/logs")

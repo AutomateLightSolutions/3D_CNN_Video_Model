@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react'
 import TrainingPage from '../components/TrainingPage.jsx'
+import FeatureExtractionPanel from '../components/FeatureExtractionPanel.jsx'
 import {
   startHybridTraining, stopHybridTraining,
   getHybridTrainingStatus, getHybridTrainingLogs, getHybridTrainingMetrics,
@@ -12,8 +13,8 @@ const inputStyle = {
 }
 
 export default function TrainHybrid() {
-  const [backbone, setBackbone] = useState('r3d')
-  const [isRunning, setIsRunning] = useState(false)
+  const [backbone,   setBackbone]   = useState('r3d')
+  const [isRunning,  setIsRunning]  = useState(false)
 
   const api = useMemo(() => ({
     start:   (cfg) => startHybridTraining({ ...cfg, backbone }),
@@ -24,21 +25,25 @@ export default function TrainHybrid() {
   }), [backbone])
 
   const extraControls = (
-    <div>
-      <label style={{ display: 'block', fontSize: 11, color: 'var(--text-2)', marginBottom: 4 }}>
-        Backbone
-      </label>
-      <select
-        value={backbone}
-        onChange={e => setBackbone(e.target.value)}
-        disabled={isRunning}
-        style={inputStyle}
-      >
-        <option value="r3d">R3D-18</option>
-        <option value="videomae">VideoMAE</option>
-        <option value="slowfast">SlowFast</option>
-      </select>
-    </div>
+    <>
+      <FeatureExtractionPanel required={true} />
+      <div>
+        <label htmlFor="backbone-select" style={{ display: 'block', fontSize: 11, color: 'var(--text-2)', marginBottom: 4 }}>
+          Backbone
+        </label>
+        <select
+          id="backbone-select"
+          value={backbone}
+          onChange={e => setBackbone(e.target.value)}
+          disabled={isRunning}
+          style={inputStyle}
+        >
+          <option value="r3d">R3D-18</option>
+          <option value="videomae">VideoMAE</option>
+          <option value="slowfast">SlowFast</option>
+        </select>
+      </div>
+    </>
   )
 
   return (

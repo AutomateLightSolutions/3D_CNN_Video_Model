@@ -6,7 +6,7 @@ import json
 import sys
 import os
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -115,31 +115,45 @@ def main():
     fold_metrics = []
     all_importances = np.zeros(X.shape[1])
 
+    metrics_path = output_dir / "metrics.json"
+    metrics_payload = {
+        "status": "training", "model": "Interpretable + RF",
+        "current_epoch": 0, "total_epochs": n_folds,
+        "best_epoch": 0, "best_val_loss": None,
+        "current": {}, "best": {},
+        "per_class_f1": {}, "completed_at": None,
+    }
+    metrics_path.write_text(json.dumps(metrics_payload, indent=2), encoding="utf-8")
+
+    best_val_loss = float("inf")
+    best_metrics  = {}
+
     for fold, (train_idx, val_idx) in enumerate(skf.split(X, y_enc), start=1):
-        X_tr, X_val = X[train_idx], X[val_idx]
+        x_tr, x_val = X[train_idx], X[val_idx]
         y_tr_c, y_val_c = y_enc[train_idx], y_enc[val_idx]
         y_tr_s, y_val_s = y_score[train_idx], y_score[val_idx]
 
         clf = RandomForestClassifier(
-            n_estimators=200, max_depth=None,
+            n_estimators=200, max_depth=None, max_features="sqrt",
             min_samples_leaf=2, n_jobs=-1, random_state=fold,
         )
         reg = RandomForestRegressor(
-            n_estimators=200, max_depth=None,
+            n_estimators=200, max_depth=None, max_features=1.0,
             min_samples_leaf=2, n_jobs=-1, random_state=fold,
         )
 
-        clf.fit(X_tr, y_tr_c)
-        reg.fit(X_tr, y_tr_s)
+        clf.fit(x_tr, y_tr_c)
+        reg.fit(x_tr, y_tr_s)
 
         all_importances += clf.feature_importances_
 
-        train_acc = accuracy_score(y_tr_c, clf.predict(X_tr))
-        val_pred = clf.predict(X_val)
+        train_acc = accuracy_score(y_tr_c, clf.predict(x_tr))
+        val_pred = clf.predict(x_val)
         val_acc = accuracy_score(y_val_c, val_pred)
         macro_f1 = f1_score(y_val_c, val_pred, average="macro", zero_division=0)
+        wf1_fold = float(f1_score(y_val_c, val_pred, average="weighted", zero_division=0))
 
-        score_pred = reg.predict(X_val)
+        score_pred = reg.predict(x_val)
         mae = float(mean_absolute_error(y_val_s, score_pred))
         r2 = float(r2_score(y_val_s, score_pred))
 
@@ -164,13 +178,31 @@ def main():
             "r2": r2,
         })
 
+        cur = {
+            "train_loss": round(train_loss, 6), "val_loss": round(val_loss, 6),
+            "val_accuracy": round(float(val_acc), 6), "macro_f1": round(float(macro_f1), 6),
+            "weighted_f1": round(wf1_fold, 6), "mae": round(mae, 6), "r2": round(r2, 6),
+        }
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_metrics  = cur.copy()
+
+        metrics_payload.update({
+            "current_epoch": fold,
+            "best_epoch": fold_metrics[[m["val_acc"] for m in fold_metrics].index(max(m["val_acc"] for m in fold_metrics))]["fold"],
+            "best_val_loss": round(best_val_loss, 6),
+            "current": cur,
+            "best": best_metrics,
+        })
+        metrics_path.write_text(json.dumps(metrics_payload, indent=2), encoding="utf-8")
+
     # ── train final model on all data ──────────────────────────────
     clf_final = RandomForestClassifier(
-        n_estimators=200, max_depth=None,
+        n_estimators=200, max_depth=None, max_features="sqrt",
         min_samples_leaf=2, n_jobs=-1, random_state=0,
     )
     reg_final = RandomForestRegressor(
-        n_estimators=200, max_depth=None,
+        n_estimators=200, max_depth=None, max_features=1.0,
         min_samples_leaf=2, n_jobs=-1, random_state=0,
     )
     clf_final.fit(X, y_enc)
@@ -205,25 +237,24 @@ def main():
         sorted(feature_importance.items(), key=lambda kv: kv[1], reverse=True)
     )
 
-    metrics = {
-        "model": "Interpretable + RF",
-        "training_completed": datetime.utcnow().isoformat(),
-        "epochs_trained": n_folds,
-        "val_acc": avg_acc,
-        "macro_f1": avg_f1,
-        "weighted_f1": wf1,
-        "mae": avg_mae,
-        "r2": avg_r2,
+    best_fold = fold_metrics[[m["val_acc"] for m in fold_metrics].index(max(m["val_acc"] for m in fold_metrics))]
+    metrics_payload.update({
+        "status": "done",
+        "current_epoch": n_folds,
+        "best_epoch": best_fold["fold"],
+        "best_val_loss": round(1.0 - best_fold["val_acc"], 6),
+        "best": {
+            "val_accuracy": round(avg_acc, 6), "macro_f1": round(avg_f1, 6),
+            "weighted_f1": round(wf1, 6), "mae": round(avg_mae, 6), "r2": round(avg_r2, 6),
+        },
         "per_class_f1": per_class_dict,
         "feature_importance": feature_importance,
         "fold_results": fold_metrics,
         "classes": classes,
         "n_samples": len(X),
-    }
-
-    (output_dir / "metrics.json").write_text(
-        json.dumps(metrics, indent=2), encoding="utf-8"
-    )
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+    })
+    metrics_path.write_text(json.dumps(metrics_payload, indent=2), encoding="utf-8")
 
     log(f"Training complete. Avg Val Acc: {avg_acc:.4f}, Avg Macro F1: {avg_f1:.4f}")
 

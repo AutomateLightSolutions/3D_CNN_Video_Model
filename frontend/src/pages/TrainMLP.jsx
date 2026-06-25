@@ -1,4 +1,5 @@
 import TrainingPage from '../components/TrainingPage.jsx'
+import FeatureExtractionPanel from '../components/FeatureExtractionPanel.jsx'
 import {
   startMLPTraining, stopMLPTraining,
   getMLPTrainingStatus, getMLPTrainingLogs, getMLPTrainingMetrics,
@@ -19,6 +20,7 @@ export default function TrainMLP() {
       defaultEpochs={30}
       defaultBatch={32}
       api={api}
+      extraControls={<FeatureExtractionPanel required={true} />}
     />
   )
 }

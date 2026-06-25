@@ -167,6 +167,8 @@ def _player_features(frames_bgr, yolo_model):
 def _pose_features(frames_bgr, pose_model):
     """Returns (4,) array: [lean, arms_above, legs_wide, arm_ext]."""
     import numpy as np
+    if pose_model is None:
+        return np.zeros(4, dtype=np.float32)
     import mediapipe as mp
 
     leans, arms_above, legs_wide, arm_ext = [], [], [], []
@@ -385,11 +387,24 @@ def main():
 
     # Load models once
     yolo_model = YOLO("yolov8n.pt")   # nano — fast enough for feature extraction
-    pose = mp.solutions.pose.Pose(
-        static_image_mode=False,
-        model_complexity=0,
-        min_detection_confidence=0.3,
-    )
+
+    # MediaPipe solutions API was removed in mediapipe 0.10.14+.
+    # Fall back gracefully: pose features (indices 15-18) will be 0.0.
+    pose = None
+    try:
+        pose = mp.solutions.pose.Pose(
+            static_image_mode=False,
+            model_complexity=0,
+            min_detection_confidence=0.3,
+        )
+        print("MediaPipe Pose loaded.", flush=True)
+    except AttributeError:
+        print(
+            "WARNING: mediapipe.solutions not available (mediapipe>=0.10.14). "
+            "Pose features (indices 15-18) will be 0. "
+            "To enable: pip install 'mediapipe==0.10.3'",
+            flush=True,
+        )
 
     FEATURES_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -412,7 +427,8 @@ def main():
         progress["done"] = i
         FEATURES_PROGRESS.write_text(json.dumps(progress), encoding="utf-8")
 
-    pose.close()
+    if pose is not None:
+        pose.close()
 
     progress["status"] = "done"
     FEATURES_PROGRESS.write_text(json.dumps(progress), encoding="utf-8")

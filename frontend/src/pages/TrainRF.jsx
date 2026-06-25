@@ -1,4 +1,5 @@
 import TrainingPage from '../components/TrainingPage.jsx'
+import FeatureExtractionPanel from '../components/FeatureExtractionPanel.jsx'
 import {
   startRFTraining, stopRFTraining,
   getRFTrainingStatus, getRFTrainingLogs, getRFTrainingMetrics,
@@ -19,6 +20,7 @@ export default function TrainRF() {
       defaultEpochs={10}
       defaultBatch={0}
       api={api}
+      extraControls={<FeatureExtractionPanel required={true} />}
     />
   )
 }

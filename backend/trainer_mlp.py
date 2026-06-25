@@ -124,8 +124,8 @@ def main():
     train_ds, val_ds = random_split(full_ds, [train_n, val_n],
                                     generator=torch.Generator().manual_seed(42))
 
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, drop_last=False)
-    val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False)
+    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, drop_last=False, num_workers=0)
+    val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=0)
 
     # ── model ──────────────────────────────────────────────────────
     class InterpMLP(nn.Module):
@@ -143,11 +143,23 @@ def main():
             return self.class_head(feat), self.score_head(feat).squeeze(1)
 
     model = InterpMLP(in_dim, n_classes).to(device)
-    opt = torch.optim.Adam(model.parameters(), lr=args.lr)
+    opt = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
     cls_criterion = nn.CrossEntropyLoss()
     reg_criterion = nn.MSELoss()
 
     best_f1, best_epoch = -1.0, 0
+    best_val_loss = float("inf")
+    best_metrics  = {}
+
+    metrics_path = output_dir / "metrics.json"
+    metrics_payload = {
+        "status": "training", "model": "Interpretable + MLP",
+        "current_epoch": 0, "total_epochs": args.epochs,
+        "best_epoch": 0, "best_val_loss": None,
+        "current": {}, "best": {},
+        "per_class_f1": {}, "completed_at": None,
+    }
+    metrics_path.write_text(json.dumps(metrics_payload, indent=2), encoding="utf-8")
 
     for epoch in range(1, args.epochs + 1):
         if _stop:
@@ -186,6 +198,7 @@ def main():
         val_loss = v_loss_sum / max(v_steps, 1)
         val_acc = sum(p == l for p, l in zip(all_preds, all_labels)) / max(len(all_labels), 1)
         macro_f1 = f1_score(all_labels, all_preds, average="macro", zero_division=0)
+        wf1_cur  = float(f1_score(all_labels, all_preds, average="weighted", zero_division=0))
         mae = float(mean_absolute_error(all_scores_true, all_scores_pred))
         r2 = float(r2_score(all_scores_true, all_scores_pred))
 
@@ -204,8 +217,26 @@ def main():
             best_f1, best_epoch = macro_f1, epoch
             torch.save(model.state_dict(), str(output_dir / "best_model.pt"))
 
+        cur = {
+            "train_loss": round(train_loss, 6), "val_loss": round(val_loss, 6),
+            "val_accuracy": round(float(val_acc), 6), "macro_f1": round(float(macro_f1), 6),
+            "weighted_f1": round(wf1_cur, 6), "mae": round(mae, 6), "r2": round(r2, 6),
+        }
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_metrics  = cur.copy()
+
+        metrics_payload.update({
+            "current_epoch": epoch,
+            "best_epoch": best_epoch,
+            "best_val_loss": round(best_val_loss, 6),
+            "current": cur,
+            "best": best_metrics,
+        })
+        metrics_path.write_text(json.dumps(metrics_payload, indent=2), encoding="utf-8")
+
     # ── final metrics ──────────────────────────────────────────────
-    model.load_state_dict(torch.load(str(output_dir / "best_model.pt"), map_location=device))
+    model.load_state_dict(torch.load(str(output_dir / "best_model.pt"), map_location=device, weights_only=True))
     model.eval()
     all_preds, all_labels = [], []
     all_scores_pred, all_scores_true = [], []
@@ -219,32 +250,28 @@ def main():
             all_scores_true.extend(scores.cpu().numpy())
 
     import numpy as np
-    val_acc = sum(p == l for p, l in zip(all_preds, all_labels)) / max(len(all_labels), 1)
+    val_acc  = sum(p == l for p, l in zip(all_preds, all_labels)) / max(len(all_labels), 1)
     macro_f1 = float(f1_score(all_labels, all_preds, average="macro", zero_division=0))
-    wf1 = float(f1_score(all_labels, all_preds, average="weighted", zero_division=0))
-    mae = float(mean_absolute_error(all_scores_true, all_scores_pred))
-    r2 = float(r2_score(all_scores_true, all_scores_pred))
+    wf1      = float(f1_score(all_labels, all_preds, average="weighted", zero_division=0))
+    mae      = float(mean_absolute_error(all_scores_true, all_scores_pred))
+    r2       = float(r2_score(all_scores_true, all_scores_pred))
 
-    per_class_f1 = f1_score(all_labels, all_preds, average=None, zero_division=0)
+    per_class_f1  = f1_score(all_labels, all_preds, average=None, zero_division=0)
     per_class_dict = {classes[i]: float(per_class_f1[i]) for i in range(len(classes)) if i < len(per_class_f1)}
 
-    metrics = {
-        "model": "Interpretable + MLP",
-        "training_completed": datetime.utcnow().isoformat(),
-        "epochs_trained": best_epoch,
-        "val_acc": float(val_acc),
-        "macro_f1": macro_f1,
-        "weighted_f1": wf1,
-        "mae": mae,
-        "r2": r2,
+    from datetime import timezone
+    metrics_payload.update({
+        "status": "done",
+        "best": {
+            "val_accuracy": round(float(val_acc), 6), "macro_f1": round(macro_f1, 6),
+            "weighted_f1": round(wf1, 6), "mae": round(mae, 6), "r2": round(r2, 6),
+        },
         "per_class_f1": per_class_dict,
         "classes": classes,
         "n_samples": len(X),
-    }
-
-    (output_dir / "metrics.json").write_text(
-        json.dumps(metrics, indent=2), encoding="utf-8"
-    )
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+    })
+    metrics_path.write_text(json.dumps(metrics_payload, indent=2), encoding="utf-8")
 
     log(f"Training complete. Best epoch: {best_epoch}, Val Acc: {val_acc:.4f}, Macro F1: {macro_f1:.4f}")
 

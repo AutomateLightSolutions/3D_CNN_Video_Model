@@ -114,6 +114,7 @@ export const getHybridTrainingMetrics = ()  => _hybrid.metrics()
 
 // --- Feature Extraction ---
 export const startFeatureExtraction     = ()  => req('/features/extract', { method: 'POST' })
+export const stopFeatureExtraction      = ()  => req('/features/stop',   { method: 'POST' })
 export const getFeatureExtractionStatus = ()  => req('/features/status')
 export const getFeatureExtractionLogs   = ()  => req('/features/logs')
 

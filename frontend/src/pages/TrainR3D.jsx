@@ -1,4 +1,5 @@
 import TrainingPage from '../components/TrainingPage.jsx'
+import FeatureExtractionPanel from '../components/FeatureExtractionPanel.jsx'
 import {
   startR3DTraining, stopR3DTraining,
   getR3DTrainingStatus, getR3DTrainingLogs, getR3DTrainingMetrics,
@@ -19,6 +20,7 @@ export default function TrainR3D() {
       defaultEpochs={40}
       defaultBatch={4}
       api={api}
+      extraControls={<FeatureExtractionPanel required={false} />}
     />
   )
 }

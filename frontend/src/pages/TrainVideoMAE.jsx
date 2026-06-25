@@ -1,4 +1,5 @@
 import TrainingPage from '../components/TrainingPage.jsx'
+import FeatureExtractionPanel from '../components/FeatureExtractionPanel.jsx'
 import {
   startVideoMAETraining, stopVideoMAETraining,
   getVideoMAETrainingStatus, getVideoMAETrainingLogs, getVideoMAETrainingMetrics,
@@ -19,6 +20,7 @@ export default function TrainVideoMAE() {
       defaultEpochs={20}
       defaultBatch={2}
       api={api}
+      extraControls={<FeatureExtractionPanel required={false} />}
     />
   )
 }
