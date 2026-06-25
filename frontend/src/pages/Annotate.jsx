@@ -12,27 +12,50 @@ import ClassSelector, {
   CLASSES,
   SHORTCUT_MAP,
 } from "../components/ClassSelector.jsx";
-import ScoreSlider from "../components/ScoreSlider.jsx";
 import TimelineEditor from "../components/TimelineEditor.jsx";
+
+const BASE_SCORES = {
+  try:         1,
+  goal_kick:   0.53,
+  card_event:  0.55,
+  lineout:     0.3,
+  scrum:       0.25,
+  maul:        0.2,
+  kick_off:    0.15,
+  tmo_replay:  0.05,
+  normal_play: 0,
+}
+
+const SCORE_TABLE = [
+  { key: "try",         label: "Try",          score: 1,    source: "Official — 5 pts" },
+  { key: "goal_kick",   label: "Goal Kick",     score: 0.53, source: "Official — avg(conversion, penalty, drop goal)" },
+  { key: "card_event",  label: "Card Event",    score: 0.55, source: "Broadcast tally — pending" },
+  { key: "lineout",     label: "Lineout",       score: 0.3,  source: "Broadcast tally — pending" },
+  { key: "scrum",       label: "Scrum",         score: 0.25, source: "Broadcast tally — pending" },
+  { key: "maul",        label: "Maul",          score: 0.2,  source: "Broadcast tally — pending" },
+  { key: "kick_off",    label: "Kick Off",      score: 0.15, source: "Broadcast tally — pending" },
+  { key: "tmo_replay",  label: "TMO / Replay",  score: 0.05, source: "Broadcast tally — pending" },
+  { key: "normal_play", label: "Normal Play",   score: 0,    source: "No highlight value" },
+]
 
 function useAnnotateState(clip) {
   const [eventClass, setEventClass] = useState("normal_play");
-  const [score, setScore] = useState(0.5);
   const [tStartAdj, setTStartAdj] = useState(0);
   const [tEndAdj, setTEndAdj] = useState(0);
   const [notes, setNotes] = useState("");
+
+  // Score is always derived from the selected event class — not editable
+  const score = BASE_SCORES[eventClass] ?? 0;
 
   useEffect(() => {
     if (!clip) return;
     if (clip.label) {
       setEventClass(clip.label.event_class);
-      setScore(clip.label.highlight_score);
       setTStartAdj(clip.label.t_start_adjusted);
       setTEndAdj(clip.label.t_end_adjusted);
       setNotes(clip.label.notes || "");
     } else {
       setEventClass("normal_play");
-      setScore(0.5);
       setTStartAdj(clip.t_start);
       setTEndAdj(clip.t_end);
       setNotes("");
@@ -48,7 +71,6 @@ function useAnnotateState(clip) {
     eventClass,
     setEventClass,
     score,
-    setScore,
     tStartAdj,
     setTStartAdj,
     tEndAdj,
@@ -57,6 +79,47 @@ function useAnnotateState(clip) {
     setNotes,
     onTimelineChange,
   };
+}
+
+function scoreColor(score) {
+  if (score >= 0.7) return 'var(--green)';
+  if (score >= 0.3) return '#f59e0b';
+  return 'var(--text-2)';
+}
+
+function scoreRangeClass(score) {
+  if (score >= 0.7)  return 'score-range score-range-6';
+  if (score >= 0.4)  return 'score-range score-range-3';
+  if (score >= 0.15) return 'score-range score-range-2';
+  return 'score-range score-range-0';
+}
+
+function BaseScoreDisplay({ score, eventClass }) {
+  const color = scoreColor(score);
+  const label = eventClass.replaceAll('_', ' ');
+  return (
+    <div className="card">
+      <h2 style={{ marginBottom: 12 }}>Base Score</h2>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 10 }}>
+        <div style={{ fontSize: 36, fontWeight: 700, color }}>
+          {score.toFixed(2)}
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--text-2)', lineHeight: 1.5 }}>
+          Base score for <strong style={{ color: 'var(--text-1)' }}>{label}</strong>
+          <br />
+          Full VisualScore computed at training time
+        </div>
+      </div>
+      <div style={{ height: 8, borderRadius: 4, background: 'var(--surface-2)' }}>
+        <div style={{
+          height: 8, borderRadius: 4,
+          width: `${score * 100}%`,
+          background: color,
+          transition: 'width 0.2s ease, background 0.2s ease',
+        }} />
+      </div>
+    </div>
+  )
 }
 
 export default function Annotate() {
@@ -298,7 +361,11 @@ export default function Annotate() {
               <p>No unlabeled clips left for this match.</p>
             </div>
           )}
-          {clip && videoSrc && <VideoPlayer src={videoSrc} />}
+          {clip && videoSrc && (
+            <div style={{ margin: '-4px 0' }}>
+              <VideoPlayer src={videoSrc} />
+            </div>
+          )}
           {clip && (
             <div
               className="card"
@@ -324,51 +391,28 @@ export default function Annotate() {
           )}
 
           <div className="card score-guide">
-            <h3 className="score-guide-title">Confidence Score Guide</h3>
+            <h3 className="score-guide-title">Base Score Reference</h3>
             <table className="score-guide-table">
               <thead>
                 <tr>
-                  <th>Score</th>
-                  <th>Meaning</th>
+                  <th>Event Class</th>
+                  <th>Base Score</th>
+                  <th>Source</th>
                 </tr>
               </thead>
               <tbody>
-                <tr>
-                  <td className="score-range score-range-6">0.90–1.00</td>
-                  <td>
-                    Try from distance, long phase build-up, first kick-off try
-                  </td>
-                </tr>
-                <tr>
-                  <td className="score-range score-range-5">0.80–0.89</td>
-                  <td>Standard try, turnover → try</td>
-                </tr>
-                <tr>
-                  <td className="score-range score-range-3">0.50–0.79</td>
-                  <td>
-                    Conversion, penalty kick, near try, Yellow/red card, big
-                    scrum win, lineout → maul → try, kick off
-                  </td>
-                </tr>
-                <tr>
-                  <td className="score-range score-range-2">0.30–0.49</td>
-                  <td>
-                    Scrum, lineout with clear outcome, breakdown turnover,
-                    Intercept, Penalty, line break
-                  </td>
-                </tr>
-                <tr>
-                  <td className="score-range score-range-1">0.10–0.29</td>
-                  <td>
-                    Tackle, ruck, maul, Knock-on, Replay, TMO, Touch/Cross Kick
-                  </td>
-                </tr>
-                <tr>
-                  <td className="score-range score-range-0">0.00–0.09</td>
-                  <td>Normal play, dead ball</td>
-                </tr>
+                {SCORE_TABLE.map(({ key, label, score, source }) => (
+                  <tr key={key}>
+                    <td style={{ fontWeight: 500 }}>{label}</td>
+                    <td className={scoreRangeClass(score)}>{score.toFixed(2)}</td>
+                    <td style={{ fontSize: 11, color: 'var(--text-2)' }}>{source}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
+            <p style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 8 }}>
+              VisualScore = 0.60 × BaseScore + 0.40 × OpticalFlow — computed at training
+            </p>
           </div>
         </div>
 
@@ -383,9 +427,7 @@ export default function Annotate() {
                 />
               </div>
 
-              <div className="card">
-                <ScoreSlider value={ann.score} onChange={ann.setScore} />
-              </div>
+              <BaseScoreDisplay score={ann.score} eventClass={ann.eventClass} />
 
               <div className="card">
                 <h2>Timeline</h2>

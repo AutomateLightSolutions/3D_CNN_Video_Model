@@ -59,14 +59,31 @@ HYBRID_METRICS_PATH = HYBRID_MODEL_DIR / _METRICS_FILENAME
 HYBRID_PID_FILE     = BASE_DIR / "hybrid_trainer.pid"
 
 HIGHLIGHT_CLASSES = [
-    "try", "conversion", "kick_off", "penalty_kick", "drop_goal",
-    "near_try", "scrum", "lineout", "touch_kick", "intercept",
-    "tackle", "ruck", "maul", "red_card", "yellow_card",
-    "turnover", "line_break", "cross_kick", "penalty", "knock_on",
-    "replay", "tmo_review", "normal_play"
+    "try", "goal_kick", "card_event",
+    "scrum", "maul", "lineout", "kick_off",
+    "tmo_replay", "normal_play",
 ]
 
-CONTEXT_CLASSES = ["replay", "tmo_review"]
+# BaseScore per class for VisualScore formula:
+# VisualScore = 0.60 * BaseScore(class) + 0.40 * OpticalFlowMagnitude_norm
+BASE_SCORES = {
+    # Derived from official World Rugby points (points / 5 max)
+    "try":         1.00,   # 5pts / 5
+    "goal_kick":   0.53,   # avg(conversion=0.40, penalty=0.60, drop_goal=0.60)
+
+    # DUMMY VALUES — replace after YouTube broadcast tally
+    "card_event":  0.55,
+    "lineout":     0.30,
+    "scrum":       0.25,
+    "maul":        0.20,
+    "kick_off":    0.15,
+    "tmo_replay":  0.05,
+
+    # Never appears in highlights
+    "normal_play": 0.00,
+}
+
+CONTEXT_CLASSES = ["tmo_replay"]
 
 WINDOW_CONFIG = {
     8:  {"frames": 16, "stride_s": 4},

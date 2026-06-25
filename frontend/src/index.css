@@ -187,10 +187,10 @@ tbody td { padding: 10px 12px; vertical-align: middle; }
   display: grid;
   grid-template-columns: 40% 1fr;
   gap: 20px;
-  height: calc(100vh - 48px);
+  align-items: start;
 }
-.annotate-left  { display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
-.annotate-right { display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+.annotate-left  { display: flex; flex-direction: column; gap: 12px; }
+.annotate-right { display: flex; flex-direction: column; gap: 12px; }
 
 .annotate-header {
   display: flex;
@@ -244,7 +244,7 @@ tbody td { padding: 10px 12px; vertical-align: middle; }
   background: var(--bg-2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 8px 12px;
+  padding: 4px 12px;
   display: flex;
   align-items: center;
   gap: 12px;

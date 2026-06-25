@@ -1,29 +1,15 @@
 import { useState } from 'react'
 
 export const CLASSES = [
-  { key: 'try',         label: 'Try',         shortcut: '1' },
-  { key: 'conversion',  label: 'Conversion',  shortcut: '2' },
-  { key: 'kick_off',    label: 'Kick Off',    shortcut: '3' },
-  { key: 'penalty_kick',label: 'Penalty Kick',shortcut: '4' },
-  { key: 'drop_goal',   label: 'Drop Goal',   shortcut: '5' },
-  { key: 'near_try',    label: 'Near Try',    shortcut: '6' },
-  { key: 'scrum',       label: 'Scrum',       shortcut: '7' },
-  { key: 'lineout',     label: 'Lineout',     shortcut: '8' },
-  { key: 'touch_kick',  label: 'Touch Kick',  shortcut: '9' },
-  { key: 'intercept',   label: 'Intercept',   shortcut: 'q' },
-  { key: 'tackle',      label: 'Tackle',      shortcut: 'w' },
-  { key: 'ruck',        label: 'Ruck',        shortcut: 'e' },
-  { key: 'maul',        label: 'Maul',        shortcut: 'r' },
-  { key: 'red_card',    label: 'Red Card',    shortcut: 't' },
-  { key: 'yellow_card', label: 'Yellow Card', shortcut: 'y' },
-  { key: 'turnover',    label: 'Turnover',    shortcut: 'u' },
-  { key: 'line_break',  label: 'Line Break',  shortcut: 'i' },
-  { key: 'cross_kick',  label: 'Cross Kick',  shortcut: 'o' },
-  { key: 'penalty',     label: 'Penalty',     shortcut: 'p' },
-  { key: 'knock_on',    label: 'Knock On',    shortcut: '[' },
-  { key: 'replay',      label: 'Replay',      shortcut: ']' },
-  { key: 'tmo_review',  label: 'TMO Review',  shortcut: '\\' },
-  { key: 'normal_play', label: 'Normal Play', shortcut: '`' },
+  { key: 'try',         label: 'Try',              shortcut: '1' },
+  { key: 'goal_kick',   label: 'Goal Kick',        shortcut: '2' },
+  { key: 'card_event',  label: 'Card Event',       shortcut: '3' },
+  { key: 'scrum',       label: 'Scrum',            shortcut: '4' },
+  { key: 'maul',        label: 'Maul',             shortcut: '5' },
+  { key: 'lineout',     label: 'Lineout',          shortcut: '6' },
+  { key: 'kick_off',    label: 'Kick Off',         shortcut: '7' },
+  { key: 'tmo_replay',  label: 'TMO / Replay',     shortcut: '8' },
+  { key: 'normal_play', label: 'Normal Play',      shortcut: '9' },
 ]
 
 export const SHORTCUT_MAP = Object.fromEntries(CLASSES.map(c => [c.shortcut, c.key]))
