@@ -65,10 +65,11 @@ def main():
     sys.path.insert(0, str(Path(__file__).parent))
     from database import engine
     from sqlalchemy import text
+    from config import BASE_SCORES
 
     with engine.connect() as conn:
         rows = conn.execute(text(
-            "SELECT c.id, l.event_class, l.highlight_score "
+            "SELECT c.id, l.event_class "
             "FROM clips c JOIN labels l ON l.clip_id = c.id"
         )).fetchall()
 
@@ -77,13 +78,17 @@ def main():
         sys.exit(1)
 
     X, y_class, y_score = [], [], []
-    for clip_id, event_class, hs in rows:
+    for clip_id, event_class in rows:
         feat_path = features_dir / f"{clip_id}.npy"
         if not feat_path.exists():
             continue
-        X.append(np.load(str(feat_path)).astype(np.float32))
+        feat = np.load(str(feat_path)).astype(np.float32)
+        flow_mag = float(feat[0])
+        base = BASE_SCORES.get(event_class, 0.1)
+        visual_score = float(np.clip(0.60 * base + 0.40 * flow_mag, 0.0, 1.0))
+        X.append(feat)
         y_class.append(event_class)
-        y_score.append(float(hs))
+        y_score.append(visual_score)
 
     if not X:
         log("ERROR: No feature files found. Run /features/extract first.")

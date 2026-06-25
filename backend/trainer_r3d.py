@@ -129,7 +129,7 @@ def main():
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
 
-    from config import DB_PATH, R3D_MODEL_DIR, HIGHLIGHT_CLASSES, WINDOW_CONFIG, R3D_METRICS_PATH
+    from config import DB_PATH, R3D_MODEL_DIR, HIGHLIGHT_CLASSES, WINDOW_CONFIG, R3D_METRICS_PATH, FEATURES_DIR, BASE_SCORES
     from models import Clip, Label, Match
 
     # R3D-18 requires a fixed temporal dimension. 16 frames is the Kinetics standard.
@@ -139,6 +139,7 @@ def main():
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    features_dir = FEATURES_DIR
     metrics_path = R3D_METRICS_PATH
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -176,7 +177,11 @@ def main():
             if label.event_class in HIGHLIGHT_CLASSES
             else len(HIGHLIGHT_CLASSES) - 1
         )
-        return (clip.clip_path, clip.window_size, class_int, label.highlight_score)
+        feat_path = features_dir / f"{clip.id}.npy"
+        flow_mag = float(np.load(str(feat_path))[0]) if feat_path.exists() else 0.0
+        base = BASE_SCORES.get(label.event_class, 0.1)
+        visual_score = float(np.clip(0.60 * base + 0.40 * flow_mag, 0.0, 1.0))
+        return (clip.clip_path, clip.window_size, class_int, visual_score)
 
     train_raw = [(c, l) for c, l, m in labeled if m.id in train_ids]
     val_raw   = [(c, l) for c, l, m in labeled if m.id in val_ids]

@@ -115,7 +115,7 @@ def main():
         print("ERROR: 'transformers' package not installed. Run: pip install transformers", flush=True)
         sys.exit(1)
 
-    from config import DB_PATH, VIDEOMAE_MODEL_DIR, HIGHLIGHT_CLASSES, WINDOW_CONFIG, VIDEOMAE_METRICS_PATH
+    from config import DB_PATH, VIDEOMAE_MODEL_DIR, HIGHLIGHT_CLASSES, WINDOW_CONFIG, VIDEOMAE_METRICS_PATH, FEATURES_DIR, BASE_SCORES
     from models import Clip, Label, Match
 
     N_FRAMES = 16
@@ -123,6 +123,7 @@ def main():
 
     output_dir   = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    features_dir = FEATURES_DIR
     metrics_path = VIDEOMAE_METRICS_PATH
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -158,7 +159,11 @@ def main():
             if label.event_class in HIGHLIGHT_CLASSES
             else len(HIGHLIGHT_CLASSES) - 1
         )
-        return (clip.clip_path, class_int, label.highlight_score)
+        feat_path = features_dir / f"{clip.id}.npy"
+        flow_mag = float(np.load(str(feat_path))[0]) if feat_path.exists() else 0.0
+        base = BASE_SCORES.get(label.event_class, 0.1)
+        visual_score = float(np.clip(0.60 * base + 0.40 * flow_mag, 0.0, 1.0))
+        return (clip.clip_path, class_int, visual_score)
 
     train_raw  = [(c, l) for c, l, m in labeled if m.id in train_ids]
     val_raw    = [(c, l) for c, l, m in labeled if m.id in val_ids]
