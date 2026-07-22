@@ -18,7 +18,7 @@ fi
 echo "Using Python: $PYTHON"
 
 echo "Starting backend..."
-cd backend && $PYTHON -m uvicorn main:app --reload --port 8000 \
+cd backend && $PYTHON -m uvicorn main:app --reload --port 9000 \
     --reload-exclude "*.log" \
     --reload-exclude "*.db" \
     --reload-exclude "*.pid" \
@@ -36,8 +36,8 @@ cd ..
 echo "Backend PID:  $BACKEND_PID"
 echo "Frontend PID: $FRONTEND_PID"
 echo ""
-echo "Backend:  http://localhost:8000"
-echo "Frontend: http://localhost:5173"
+echo "Backend:  http://localhost:9000"
+echo "Frontend: http://localhost:5174"
 echo ""
 echo "Press Ctrl+C to stop both servers."
 

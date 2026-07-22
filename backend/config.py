@@ -59,7 +59,7 @@ HYBRID_METRICS_PATH = HYBRID_MODEL_DIR / _METRICS_FILENAME
 HYBRID_PID_FILE     = BASE_DIR / "hybrid_trainer.pid"
 
 HIGHLIGHT_CLASSES = [
-    "try", "goal_kick", "card_event",
+    "try", "goal_kick", "card_event", "penalty",
     "scrum", "maul", "lineout", "kick_off",
     "tmo_replay", "normal_play",
 ]
@@ -73,6 +73,7 @@ BASE_SCORES = {
 
     # DUMMY VALUES — replace after YouTube broadcast tally
     "card_event":  0.55,
+    "penalty":     0.35,   # penalty awarded for foul play (no sanction issued)
     "lineout":     0.30,
     "scrum":       0.25,
     "maul":        0.20,

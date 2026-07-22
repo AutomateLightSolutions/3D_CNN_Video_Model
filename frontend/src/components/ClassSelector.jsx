@@ -10,6 +10,7 @@ export const CLASSES = [
   { key: 'kick_off',    label: 'Kick Off',         shortcut: '7' },
   { key: 'tmo_replay',  label: 'TMO / Replay',     shortcut: '8' },
   { key: 'normal_play', label: 'Normal Play',      shortcut: '9' },
+  { key: 'penalty',     label: 'Penalty',          shortcut: '0' },
 ]
 
 export const SHORTCUT_MAP = Object.fromEntries(CLASSES.map(c => [c.shortcut, c.key]))

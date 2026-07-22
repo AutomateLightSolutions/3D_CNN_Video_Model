@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { getExportStats, downloadJson, downloadCsv } from '../api/client.js'
 
 const CLASSES = [
-  'try', 'goal_kick', 'card_event', 'scrum',
+  'try', 'goal_kick', 'card_event', 'penalty', 'scrum',
   'maul', 'lineout', 'kick_off', 'tmo_replay', 'normal_play',
 ]
 
@@ -10,6 +10,7 @@ const CLASS_LABELS = {
   try:         'Try',
   goal_kick:   'Goal Kick',
   card_event:  'Card Event',
+  penalty:     'Penalty',
   scrum:       'Scrum',
   maul:        'Maul',
   lineout:     'Lineout',
