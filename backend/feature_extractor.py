@@ -408,7 +408,7 @@ def main():
 
     FEATURES_DIR.mkdir(parents=True, exist_ok=True)
 
-    progress = {"total": total, "done": 0, "status": "running"}
+    progress = {"total": total, "done": 0, "status": "running", "pose_available": pose is not None}
     FEATURES_PROGRESS.write_text(json.dumps(progress), encoding="utf-8")
 
     for i, clip in enumerate(labeled_clips, 1):

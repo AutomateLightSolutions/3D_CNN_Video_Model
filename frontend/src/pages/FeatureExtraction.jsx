@@ -124,6 +124,19 @@ export default function FeatureExtraction() {
           </div>
         )}
 
+        {status.pose_available === false && (
+          <div
+            className="error-box"
+            style={{ marginTop: 12, borderColor: "var(--amber)", color: "var(--amber)" }}
+          >
+            MediaPipe pose estimation is unavailable in this environment (mediapipe&gt;=0.10.14
+            removed the <code>solutions</code> API). Pose features (indices 15–18: body lean,
+            arms-above-shoulder, leg stance, arm extension) were written as <strong>zero</strong>{" "}
+            for every clip extracted this run. Install <code>mediapipe==0.10.13</code> and
+            re-extract to restore them.
+          </div>
+        )}
+
         {(isRunning || isDone) && status.total > 0 && (
           <div style={{ marginTop: 14 }}>
             <div
