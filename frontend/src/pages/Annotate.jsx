@@ -15,30 +15,75 @@ import ClassSelector, {
 import TimelineEditor from "../components/TimelineEditor.jsx";
 
 const BASE_SCORES = {
-  try:         1,
-  goal_kick:   0.53,
-  card_event:  0.55,
-  penalty:     0.35,
-  lineout:     0.3,
-  scrum:       0.25,
-  maul:        0.2,
-  kick_off:    0.15,
-  tmo_replay:  0.05,
-  normal_play: 0,
-}
+  try: 1.0,
+  goal_kick: 0.7814,
+  card_event: 1.0,
+  penalty: 0.3546,
+  lineout: 0.121,
+  scrum: 0.1461,
+  maul: 0.2353,
+  kick_off: 0.1931,
+  tmo_replay: 0.75,
+  normal_play: 0.0054,
+};
 
 const SCORE_TABLE = [
-  { key: "try",         label: "Try",          score: 1,    source: "Official — 5 pts" },
-  { key: "goal_kick",   label: "Goal Kick",     score: 0.53, source: "Official — avg(conversion, penalty, drop goal)" },
-  { key: "card_event",  label: "Card Event",    score: 0.55, source: "Broadcast tally — pending" },
-  { key: "penalty",     label: "Penalty",       score: 0.35, source: "Broadcast tally — pending" },
-  { key: "lineout",     label: "Lineout",       score: 0.3,  source: "Broadcast tally — pending" },
-  { key: "scrum",       label: "Scrum",         score: 0.25, source: "Broadcast tally — pending" },
-  { key: "maul",        label: "Maul",          score: 0.2,  source: "Broadcast tally — pending" },
-  { key: "kick_off",    label: "Kick Off",      score: 0.15, source: "Broadcast tally — pending" },
-  { key: "tmo_replay",  label: "TMO / Replay",  score: 0.05, source: "Broadcast tally — pending" },
-  { key: "normal_play", label: "Normal Play",   score: 0,    source: "No highlight value" },
-]
+  { key: "try", label: "Try", score: 1.0, source: "Youtube survey — 100.00" },
+  {
+    key: "card_event",
+    label: "Card Event",
+    score: 1.0,
+    source: "Youtube survey — 100.00",
+  },
+  {
+    key: "goal_kick",
+    label: "Goal Kick",
+    score: 0.7814,
+    source: "Youtube survey — 78.14",
+  },
+  {
+    key: "tmo_replay",
+    label: "TMO / Replay",
+    score: 0.75,
+    source: "Youtube survey — 75.00",
+  },
+  {
+    key: "penalty",
+    label: "Penalty",
+    score: 0.3546,
+    source: "Youtube survey — 35.46",
+  },
+  {
+    key: "maul",
+    label: "Maul",
+    score: 0.2353,
+    source: "Youtube survey — 23.53",
+  },
+  {
+    key: "kick_off",
+    label: "Kick Off",
+    score: 0.1931,
+    source: "Youtube survey — 19.31",
+  },
+  {
+    key: "scrum",
+    label: "Scrum",
+    score: 0.1461,
+    source: "Youtube survey — 14.61",
+  },
+  {
+    key: "lineout",
+    label: "Lineout",
+    score: 0.121,
+    source: "Youtube survey — 12.10",
+  },
+  {
+    key: "normal_play",
+    label: "Normal Play",
+    score: 0.0054,
+    source: "Youtube survey — 0.54",
+  },
+];
 
 function useAnnotateState(clip) {
   const [eventClass, setEventClass] = useState("normal_play");
@@ -84,44 +129,57 @@ function useAnnotateState(clip) {
 }
 
 function scoreColor(score) {
-  if (score >= 0.7) return 'var(--green)';
-  if (score >= 0.3) return '#f59e0b';
-  return 'var(--text-2)';
+  if (score >= 0.7) return "var(--green)";
+  if (score >= 0.3) return "#f59e0b";
+  return "var(--text-2)";
 }
 
 function scoreRangeClass(score) {
-  if (score >= 0.7)  return 'score-range score-range-6';
-  if (score >= 0.4)  return 'score-range score-range-3';
-  if (score >= 0.15) return 'score-range score-range-2';
-  return 'score-range score-range-0';
+  if (score >= 0.7) return "score-range score-range-6";
+  if (score >= 0.4) return "score-range score-range-3";
+  if (score >= 0.15) return "score-range score-range-2";
+  return "score-range score-range-0";
 }
 
 function BaseScoreDisplay({ score, eventClass }) {
   const color = scoreColor(score);
-  const label = eventClass.replaceAll('_', ' ');
+  const label = eventClass.replaceAll("_", " ");
   return (
     <div className="card">
       <h2 style={{ marginBottom: 12 }}>Base Score</h2>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 10 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 16,
+          marginBottom: 10,
+        }}
+      >
         <div style={{ fontSize: 36, fontWeight: 700, color }}>
           {score.toFixed(2)}
         </div>
-        <div style={{ fontSize: 12, color: 'var(--text-2)', lineHeight: 1.5 }}>
-          Base score for <strong style={{ color: 'var(--text-1)' }}>{label}</strong>
+        <div style={{ fontSize: 12, color: "var(--text-2)", lineHeight: 1.5 }}>
+          Base score for{" "}
+          <strong style={{ color: "var(--text-1)" }}>{label}</strong>
           <br />
           Full VisualScore computed at training time
         </div>
       </div>
-      <div style={{ height: 8, borderRadius: 4, background: 'var(--surface-2)' }}>
-        <div style={{
-          height: 8, borderRadius: 4,
-          width: `${score * 100}%`,
-          background: color,
-          transition: 'width 0.2s ease, background 0.2s ease',
-        }} />
+      <div
+        style={{ height: 8, borderRadius: 4, background: "var(--surface-2)" }}
+      >
+        <div
+          style={{
+            height: 8,
+            borderRadius: 4,
+            width: `${score * 100}%`,
+            background: color,
+            transition: "width 0.2s ease, background 0.2s ease",
+          }}
+        />
       </div>
     </div>
-  )
+  );
 }
 
 export default function Annotate() {
@@ -364,7 +422,7 @@ export default function Annotate() {
             </div>
           )}
           {clip && videoSrc && (
-            <div style={{ margin: '-4px 0' }}>
+            <div style={{ margin: "-4px 0" }}>
               <VideoPlayer src={videoSrc} />
             </div>
           )}
@@ -406,14 +464,19 @@ export default function Annotate() {
                 {SCORE_TABLE.map(({ key, label, score, source }) => (
                   <tr key={key}>
                     <td style={{ fontWeight: 500 }}>{label}</td>
-                    <td className={scoreRangeClass(score)}>{score.toFixed(2)}</td>
-                    <td style={{ fontSize: 11, color: 'var(--text-2)' }}>{source}</td>
+                    <td className={scoreRangeClass(score)}>
+                      {score.toFixed(2)}
+                    </td>
+                    <td style={{ fontSize: 11, color: "var(--text-2)" }}>
+                      {source}
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-            <p style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 8 }}>
-              VisualScore = 0.60 × BaseScore + 0.40 × OpticalFlow — computed at training
+            <p style={{ fontSize: 11, color: "var(--text-2)", marginTop: 8 }}>
+              VisualScore = 0.60 × BaseScore + 0.40 × OpticalFlow — computed at
+              training
             </p>
           </div>
         </div>

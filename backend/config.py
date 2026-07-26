@@ -66,22 +66,19 @@ HIGHLIGHT_CLASSES = [
 
 # BaseScore per class for VisualScore formula:
 # VisualScore = 0.60 * BaseScore(class) + 0.40 * OpticalFlowMagnitude_norm
+# Derived from audience survey on highlight-worthiness per event type
+# (survey score / 100, normalised to [0, 1]).
 BASE_SCORES = {
-    # Derived from official World Rugby points (points / 5 max)
-    "try":         1.00,   # 5pts / 5
-    "goal_kick":   0.53,   # avg(conversion=0.40, penalty=0.60, drop_goal=0.60)
-
-    # DUMMY VALUES — replace after YouTube broadcast tally
-    "card_event":  0.55,
-    "penalty":     0.35,   # penalty awarded for foul play (no sanction issued)
-    "lineout":     0.30,
-    "scrum":       0.25,
-    "maul":        0.20,
-    "kick_off":    0.15,
-    "tmo_replay":  0.05,
-
-    # Never appears in highlights
-    "normal_play": 0.00,
+    "try":         1.0000,   # 100.00
+    "goal_kick":   0.7814,   # 78.14
+    "card_event":  1.0000,   # 100.00
+    "penalty":     0.3546,   # 35.46
+    "lineout":     0.1210,   # 12.10
+    "scrum":       0.1461,   # 14.61
+    "maul":        0.2353,   # 23.53
+    "kick_off":    0.1931,   # 19.31
+    "tmo_replay":  0.7500,   # 75.00
+    "normal_play": 0.0054,   # 0.54
 }
 
 CONTEXT_CLASSES = ["tmo_replay"]
