@@ -5,9 +5,7 @@ import argparse
 import json
 import signal
 import sys
-import os
-from collections import Counter
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -51,9 +49,7 @@ def main():
         import numpy as np
         import torch
         import torch.nn as nn
-        from torch.utils.data import Dataset, DataLoader, random_split
-        from sklearn.metrics import f1_score, mean_absolute_error, r2_score
-        from sklearn.preprocessing import LabelEncoder
+        from torch.utils.data import Dataset, DataLoader
     except ImportError as e:
         log(f"ERROR: {e}")
         sys.exit(1)
@@ -61,49 +57,46 @@ def main():
     device = torch.device("cuda" if args.device == "cuda" and torch.cuda.is_available() else "cpu")
     log(f"Using device: {device}")
 
-    # ── load features ──────────────────────────────────────────────
+    # ── load features via the shared match-level split ──────────────
     sys.path.insert(0, str(Path(__file__).parent))
     from database import engine
-    from sqlalchemy import text
-    from config import BASE_SCORES
+    from sqlalchemy.orm import sessionmaker
+    from config import HIGHLIGHT_CLASSES
+    from training_common import load_labeled_split, class_int_for, visual_score_for, compute_full_metrics
 
-    with engine.connect() as conn:
-        rows = conn.execute(text(
-            "SELECT c.id, l.event_class "
-            "FROM clips c JOIN labels l ON l.clip_id = c.id"
-        )).fetchall()
+    Session = sessionmaker(bind=engine)
+    db = Session()
+    train_raw, val_raw = load_labeled_split(db)
+    db.close()
 
-    if not rows:
+    if not train_raw:
         log("ERROR: No labeled clips found.")
         sys.exit(1)
 
-    X, y_class, y_score = [], [], []
-    for clip_id, event_class in rows:
-        feat_path = features_dir / f"{clip_id}.npy"
-        if not feat_path.exists():
-            continue
-        feat = np.load(str(feat_path)).astype(np.float32)
-        flow_mag = float(feat[0])
-        base = BASE_SCORES.get(event_class, 0.1)
-        visual_score = float(np.clip(0.60 * base + 0.40 * flow_mag, 0.0, 1.0))
-        X.append(feat)
-        y_class.append(event_class)
-        y_score.append(visual_score)
+    def build_xy(raw):
+        X, y_class, y_score = [], [], []
+        for clip, label in raw:
+            feat_path = features_dir / f"{clip.id}.npy"
+            if not feat_path.exists():
+                continue
+            feat = np.load(str(feat_path)).astype(np.float32)
+            flow_mag = float(feat[0])
+            X.append(feat)
+            y_class.append(class_int_for(label.event_class))
+            y_score.append(visual_score_for(label.event_class, flow_mag))
+        X = np.array(X, dtype=np.float32) if X else np.zeros((0, 25), dtype=np.float32)
+        return X, np.array(y_class, dtype=np.int64), np.array(y_score, dtype=np.float32)
 
-    if not X:
+    X_train, y_train_c, y_train_s = build_xy(train_raw)
+    X_val, y_val_c, y_val_s = build_xy(val_raw)
+
+    if len(X_train) == 0 or len(X_val) == 0:
         log("ERROR: No feature files found. Run /features/extract first.")
         sys.exit(1)
 
-    X = np.array(X, dtype=np.float32)
-    y_score = np.array(y_score, dtype=np.float32)
-
-    le = LabelEncoder()
-    y_enc = le.fit_transform(y_class).astype(np.int64)
-    classes = list(le.classes_)
-    n_classes = len(classes)
-    in_dim = X.shape[1]
-
-    log(f"Loaded {len(X)} clips, {in_dim} features, {n_classes} classes.")
+    n_classes = len(HIGHLIGHT_CLASSES)
+    in_dim = X_train.shape[1]
+    log(f"Train: {len(X_train)} | Val: {len(X_val)}, {in_dim} features, {n_classes} classes.")
 
     # ── dataset ────────────────────────────────────────────────────
     class FeatDataset(Dataset):
@@ -118,14 +111,11 @@ def main():
         def __getitem__(self, i):
             return self.feats[i], self.labels[i], self.scores[i]
 
-    full_ds = FeatDataset(X, y_enc, y_score)
-    val_n = max(1, int(0.2 * len(full_ds)))
-    train_n = len(full_ds) - val_n
-    train_ds, val_ds = random_split(full_ds, [train_n, val_n],
-                                    generator=torch.Generator().manual_seed(42))
+    train_ds = FeatDataset(X_train, y_train_c, y_train_s)
+    val_ds   = FeatDataset(X_val,   y_val_c,   y_val_s)
 
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, drop_last=False, num_workers=0)
-    val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=0)
+    val_loader   = DataLoader(val_ds,   batch_size=args.batch_size, shuffle=False, num_workers=0)
 
     # ── model ──────────────────────────────────────────────────────
     class InterpMLP(nn.Module):
@@ -157,7 +147,7 @@ def main():
         "current_epoch": 0, "total_epochs": args.epochs,
         "best_epoch": 0, "best_val_loss": None,
         "current": {}, "best": {},
-        "per_class_f1": {}, "completed_at": None,
+        "per_class_f1": {}, "confusion_matrix": [], "completed_at": None,
     }
     metrics_path.write_text(json.dumps(metrics_payload, indent=2), encoding="utf-8")
 
@@ -196,35 +186,31 @@ def main():
                 all_scores_true.extend(scores.cpu().numpy())
 
         val_loss = v_loss_sum / max(v_steps, 1)
-        val_acc = sum(p == l for p, l in zip(all_preds, all_labels)) / max(len(all_labels), 1)
-        macro_f1 = f1_score(all_labels, all_preds, average="macro", zero_division=0)
-        wf1_cur  = float(f1_score(all_labels, all_preds, average="weighted", zero_division=0))
-        mae = float(mean_absolute_error(all_scores_true, all_scores_pred))
-        r2 = float(r2_score(all_scores_true, all_scores_pred))
+        m = compute_full_metrics(all_labels, all_preds, all_scores_true, all_scores_pred, HIGHLIGHT_CLASSES)
 
         log(
             f"EPOCH {epoch} "
             f"TRAIN_LOSS {train_loss:.4f} "
             f"VAL_LOSS {val_loss:.4f} "
-            f"VAL_ACC {val_acc:.4f} "
-            f"MACRO_F1 {macro_f1:.4f} "
-            f"MAE {mae:.4f} "
-            f"R2 {r2:.4f}"
+            f"VAL_ACC {m['val_accuracy']:.4f} "
+            f"MACRO_F1 {m['macro_f1']:.4f} "
+            f"MAE {m['mae']:.4f} "
+            f"R2 {m['r2']:.4f}"
         )
 
         torch.save(model.state_dict(), str(output_dir / "last_model.pt"))
-        if macro_f1 >= best_f1:
-            best_f1, best_epoch = macro_f1, epoch
+        if m["macro_f1"] >= best_f1:
+            best_f1, best_epoch = m["macro_f1"], epoch
             torch.save(model.state_dict(), str(output_dir / "best_model.pt"))
 
         cur = {
             "train_loss": round(train_loss, 6), "val_loss": round(val_loss, 6),
-            "val_accuracy": round(float(val_acc), 6), "macro_f1": round(float(macro_f1), 6),
-            "weighted_f1": round(wf1_cur, 6), "mae": round(mae, 6), "r2": round(r2, 6),
+            "val_accuracy": m["val_accuracy"], "macro_f1": m["macro_f1"],
+            "weighted_f1": m["weighted_f1"], "mae": m["mae"], "r2": m["r2"],
         }
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            best_metrics  = cur.copy()
+            best_metrics  = {**cur, "pearson": m["pearson"]}
 
         metrics_payload.update({
             "current_epoch": epoch,
@@ -232,10 +218,12 @@ def main():
             "best_val_loss": round(best_val_loss, 6),
             "current": cur,
             "best": best_metrics,
+            "per_class_f1":     m["per_class_f1"]     if val_loss <= best_val_loss else metrics_payload.get("per_class_f1", {}),
+            "confusion_matrix": m["confusion_matrix"]  if val_loss <= best_val_loss else metrics_payload.get("confusion_matrix", []),
         })
         metrics_path.write_text(json.dumps(metrics_payload, indent=2), encoding="utf-8")
 
-    # ── final metrics ──────────────────────────────────────────────
+    # ── final metrics (reload best checkpoint) ──────────────────────
     model.load_state_dict(torch.load(str(output_dir / "best_model.pt"), map_location=device, weights_only=True))
     model.eval()
     all_preds, all_labels = [], []
@@ -249,31 +237,26 @@ def main():
             all_scores_pred.extend(score_pred.cpu().numpy())
             all_scores_true.extend(scores.cpu().numpy())
 
-    import numpy as np
-    val_acc  = sum(p == l for p, l in zip(all_preds, all_labels)) / max(len(all_labels), 1)
-    macro_f1 = float(f1_score(all_labels, all_preds, average="macro", zero_division=0))
-    wf1      = float(f1_score(all_labels, all_preds, average="weighted", zero_division=0))
-    mae      = float(mean_absolute_error(all_scores_true, all_scores_pred))
-    r2       = float(r2_score(all_scores_true, all_scores_pred))
+    m = compute_full_metrics(all_labels, all_preds, all_scores_true, all_scores_pred, HIGHLIGHT_CLASSES)
 
-    per_class_f1  = f1_score(all_labels, all_preds, average=None, zero_division=0)
-    per_class_dict = {classes[i]: float(per_class_f1[i]) for i in range(len(classes)) if i < len(per_class_f1)}
-
-    from datetime import timezone
     metrics_payload.update({
         "status": "done",
         "best": {
-            "val_accuracy": round(float(val_acc), 6), "macro_f1": round(macro_f1, 6),
-            "weighted_f1": round(wf1, 6), "mae": round(mae, 6), "r2": round(r2, 6),
+            "val_accuracy": m["val_accuracy"], "macro_f1": m["macro_f1"],
+            "weighted_f1": m["weighted_f1"], "mae": m["mae"], "r2": m["r2"],
+            "pearson": m["pearson"],
         },
-        "per_class_f1": per_class_dict,
-        "classes": classes,
-        "n_samples": len(X),
+        "per_class_f1": m["per_class_f1"],
+        "confusion_matrix": m["confusion_matrix"],
+        "classes": HIGHLIGHT_CLASSES,
+        "n_samples": len(X_train) + len(X_val),
+        "n_train": len(X_train),
+        "n_val": len(X_val),
         "completed_at": datetime.now(timezone.utc).isoformat(),
     })
     metrics_path.write_text(json.dumps(metrics_payload, indent=2), encoding="utf-8")
 
-    log(f"Training complete. Best epoch: {best_epoch}, Val Acc: {val_acc:.4f}, Macro F1: {macro_f1:.4f}")
+    log(f"Training complete. Best epoch: {best_epoch}, Val Acc: {m['val_accuracy']:.4f}, Macro F1: {m['macro_f1']:.4f}")
 
 
 if __name__ == "__main__":

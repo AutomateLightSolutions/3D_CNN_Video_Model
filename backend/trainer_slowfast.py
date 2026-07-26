@@ -44,35 +44,8 @@ def compute_class_weights(labels_list, highlight_classes):
 
 
 def compute_metrics(all_labels, all_preds, all_scores_true, all_scores_pred, highlight_classes):
-    import numpy as np
-    from sklearn.metrics import f1_score, confusion_matrix, accuracy_score
-    from scipy.stats import pearsonr
-
-    val_accuracy = accuracy_score(all_labels, all_preds)
-    macro_f1     = f1_score(all_labels, all_preds, average="macro",    zero_division=0)
-    weighted_f1  = f1_score(all_labels, all_preds, average="weighted", zero_division=0)
-    per_class_f1 = f1_score(all_labels, all_preds, average=None,       zero_division=0,
-                            labels=list(range(len(highlight_classes))))
-
-    t = np.array(all_scores_true)
-    p = np.array(all_scores_pred)
-    mae     = float(np.mean(np.abs(t - p)))
-    ss_res  = float(np.sum((t - p) ** 2))
-    ss_tot  = float(np.sum((t - t.mean()) ** 2))
-    r2      = 1.0 - ss_res / ss_tot if ss_tot > 1e-8 else 0.0
-    pearson = float(pearsonr(t, p)[0]) if len(t) > 1 else 0.0
-
-    cm = confusion_matrix(all_labels, all_preds, labels=list(range(len(highlight_classes))))
-    return {
-        "val_accuracy": round(float(val_accuracy), 6),
-        "macro_f1":     round(float(macro_f1),     6),
-        "weighted_f1":  round(float(weighted_f1),  6),
-        "mae":          round(mae,     6),
-        "r2":           round(r2,      6),
-        "pearson":      round(pearson, 6),
-        "per_class_f1": {highlight_classes[i]: round(float(v), 6) for i, v in enumerate(per_class_f1)},
-        "confusion_matrix": cm.tolist(),
-    }
+    from training_common import compute_full_metrics
+    return compute_full_metrics(all_labels, all_preds, all_scores_true, all_scores_pred, highlight_classes)
 
 
 def write_metrics(path, payload):
@@ -121,8 +94,8 @@ def main():
         _USE_PYTORCHVIDEO = False
         print("WARNING: pytorchvideo not installed. Falling back to torch.hub for SlowFast.", flush=True)
 
-    from config import DB_PATH, SLOWFAST_MODEL_DIR, HIGHLIGHT_CLASSES, WINDOW_CONFIG, SLOWFAST_METRICS_PATH, FEATURES_DIR, BASE_SCORES
-    from models import Clip, Label, Match
+    from config import DB_PATH, SLOWFAST_MODEL_DIR, HIGHLIGHT_CLASSES, WINDOW_CONFIG, SLOWFAST_METRICS_PATH, FEATURES_DIR
+    from training_common import load_labeled_split, class_int_for, visual_score_for
 
     output_dir   = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -136,42 +109,19 @@ def main():
     Session   = sessionmaker(bind=db_engine)
     db        = Session()
 
-    labeled = (
-        db.query(Clip, Label, Match)
-        .join(Label, Clip.id == Label.clip_id)
-        .join(Match, Clip.match_id == Match.id)
-        .filter(Label.highlight_score.isnot(None))
-        .all()
-    )
+    train_raw, val_raw = load_labeled_split(db)
 
-    if not labeled:
+    if not train_raw:
         print("No labeled clips found. Exiting.")
         db.close()
         sys.exit(0)
 
-    match_ids = list({m.id for _, _, m in labeled})
-    rng = np.random.default_rng(42)
-    rng.shuffle(match_ids)
-    split     = max(1, int(len(match_ids) * 0.85))
-    train_ids = set(match_ids[:split])
-    val_ids   = set(match_ids[split:])
-
     def make_item(clip, label):
-        class_int = (
-            HIGHLIGHT_CLASSES.index(label.event_class)
-            if label.event_class in HIGHLIGHT_CLASSES
-            else len(HIGHLIGHT_CLASSES) - 1
-        )
+        class_int = class_int_for(label.event_class)
         feat_path = features_dir / f"{clip.id}.npy"
         flow_mag = float(np.load(str(feat_path))[0]) if feat_path.exists() else 0.0
-        base = BASE_SCORES.get(label.event_class, 0.1)
-        visual_score = float(np.clip(0.60 * base + 0.40 * flow_mag, 0.0, 1.0))
+        visual_score = visual_score_for(label.event_class, flow_mag)
         return (clip.clip_path, class_int, visual_score)
-
-    train_raw  = [(c, l) for c, l, m in labeled if m.id in train_ids]
-    val_raw    = [(c, l) for c, l, m in labeled if m.id in val_ids]
-    if not val_raw:
-        val_raw = train_raw[: max(1, len(train_raw) // 10)]
 
     train_data = [make_item(c, l) for c, l in train_raw]
     val_data   = [make_item(c, l) for c, l in val_raw]
