@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import {
   createMatch, listMatches, extractClips, deleteMatch,
-  getExtractionProgress, getExtractionLog,
+  getExtractionProgress, getExtractionLog, browseMatchFile,
 } from '../api/client.js'
 
 function statusBadge(status) {
@@ -134,6 +134,7 @@ export default function MatchList() {
   const [filePath, setFilePath] = useState('')
   const [error,    setError]    = useState('')
   const [loading,  setLoading]  = useState(false)
+  const [browsing, setBrowsing] = useState(false)
   const [extractingIds, setExtractingIds] = useState(new Set())
 
   const load = async () => {
@@ -155,6 +156,25 @@ export default function MatchList() {
   }
 
   useEffect(() => { load() }, [])
+
+  const handleBrowse = async () => {
+    setError('')
+    setBrowsing(true)
+    try {
+      const { file_path } = await browseMatchFile()
+      if (file_path) {
+        setFilePath(file_path)
+        if (!name.trim()) {
+          const base = file_path.split(/[\\/]/).pop() || ''
+          setName(base.replace(/\.[^.]+$/, ''))
+        }
+      }
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setBrowsing(false)
+    }
+  }
 
   const handleCreate = async (e) => {
     e.preventDefault()
@@ -231,13 +251,23 @@ export default function MatchList() {
             </div>
             <div className="form-group" style={{ flex: 1 }}>
               <label>Video File Path (absolute)</label>
-              <input
-                type="text"
-                value={filePath}
-                onChange={e => setFilePath(e.target.value)}
-                placeholder="C:\Users\ASUS\Downloads\match.mp4"
-                style={{ minWidth: 320 }}
-              />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  type="text"
+                  value={filePath}
+                  onChange={e => setFilePath(e.target.value)}
+                  placeholder="C:\Users\ASUS\Downloads\match.mp4"
+                  style={{ minWidth: 320, flex: 1 }}
+                />
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={handleBrowse}
+                  disabled={browsing}
+                >
+                  {browsing ? 'Opening…' : 'Browse…'}
+                </button>
+              </div>
             </div>
             <button type="submit" className="btn btn-primary" disabled={loading}>
               {loading ? 'Registering…' : 'Register'}

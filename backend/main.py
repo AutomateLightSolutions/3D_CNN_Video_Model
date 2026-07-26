@@ -243,6 +243,32 @@ def _trainer_metrics(metrics_path: Path):
 # Matches
 # ---------------------------------------------------------------------------
 
+@app.post("/matches/browse")
+def browse_match_file():
+    """Opens a native file-picker dialog on the machine running the backend
+    and returns the chosen path, so the user doesn't have to type an
+    absolute path by hand. Only meaningful when frontend and backend run on
+    the same machine (the local dev/desktop-style usage this app targets)."""
+    script = Path(__file__).parent / "file_dialog.py"
+    kwargs = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
+    try:
+        result = subprocess.run(
+            [sys.executable, str(script)],
+            capture_output=True, text=True, timeout=300, **kwargs,
+        )
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=408, detail="File browse dialog timed out")
+
+    if result.returncode != 0:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not open file browser: {result.stderr.strip() or 'unknown error'}",
+        )
+
+    path = result.stdout.strip()
+    return {"file_path": path or None}
+
+
 @app.post("/matches", response_model=schemas.MatchOut)
 def create_match(body: schemas.MatchCreate, db: Session = Depends(get_db)):
     file_path = Path(body.file_path)

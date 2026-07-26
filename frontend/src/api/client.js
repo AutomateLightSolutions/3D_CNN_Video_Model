@@ -20,6 +20,7 @@ const json = (body) => ({
 
 // --- Matches ---
 export const createMatch    = (name, file_path) => req('/matches', json({ name, file_path }))
+export const browseMatchFile = ()               => req('/matches/browse', { method: 'POST' })
 export const listMatches    = ()                 => req('/matches')
 export const extractClips   = (id)              => req(`/matches/${id}/extract`, { method: 'POST' })
 export const deleteMatch    = (id)              => req(`/matches/${id}`, { method: 'DELETE' })
