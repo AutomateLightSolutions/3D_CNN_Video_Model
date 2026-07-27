@@ -40,6 +40,9 @@ class Label(Base):
     clip_id = Column(Integer, ForeignKey("clips.id"), unique=True, nullable=False)
     event_class = Column(String, nullable=False)
     highlight_score = Column(Float, nullable=False)
+    # VisualScore = 0.60 * BaseScore(event_class) + 0.40 * OpticalFlowMagnitude_norm
+    # Populated by feature_extractor.py once optical flow is available for this clip.
+    merged_visual_score = Column(Float, nullable=True)
     t_start_adjusted = Column(Float, nullable=False)
     t_end_adjusted = Column(Float, nullable=False)
     notes = Column(String, nullable=True)

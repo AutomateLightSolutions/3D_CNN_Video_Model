@@ -362,6 +362,7 @@ def main():
 
     from config import DB_PATH, FEATURES_DIR, FEATURES_PROGRESS
     from models import Clip, Label
+    from training_common import visual_score_for
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -376,7 +377,8 @@ def main():
         .filter(Label.highlight_score.isnot(None))
         .all()
     )
-    db.close()
+    # NOTE: db stays open through the extraction loop below — merged_visual_score
+    # is written back per clip as soon as its optical-flow feature is known.
 
     total = len(labeled_clips)
     if total == 0:
@@ -414,6 +416,7 @@ def main():
     for i, clip in enumerate(labeled_clips, 1):
         out_path = output_dir / f"{clip.id}.npy"
         if out_path.exists():
+            vec = np.load(str(out_path))
             print(f"SKIP {i}/{total} clip_id={clip.id} (already extracted)", flush=True)
         else:
             try:
@@ -422,11 +425,20 @@ def main():
                 print(f"EXTRACTED {i}/{total} clip_id={clip.id}", flush=True)
             except Exception as exc:
                 print(f"WARNING {i}/{total} clip_id={clip.id} failed: {exc}", flush=True)
-                np.save(str(out_path), np.zeros(N_FEATURES, dtype=np.float32))
+                vec = np.zeros(N_FEATURES, dtype=np.float32)
+                np.save(str(out_path), vec)
+
+        # Merge BaseScore(event_class) with this clip's optical-flow magnitude
+        # (feature index 0) and persist it — covers freshly extracted clips
+        # and backfills any already-extracted clip that predates this column.
+        if clip.label is not None:
+            clip.label.merged_visual_score = round(visual_score_for(clip.label.event_class, float(vec[0])), 4)
+            db.commit()
 
         progress["done"] = i
         FEATURES_PROGRESS.write_text(json.dumps(progress), encoding="utf-8")
 
+    db.close()
     if pose is not None:
         pose.close()
 

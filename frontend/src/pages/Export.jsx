@@ -100,9 +100,9 @@ export default function Export() {
         </div>
 
         <div className="card">
-          <h2>Base Score Distribution</h2>
+          <h2>Merged Visual Score Distribution</h2>
           <p style={{ fontSize: 12, color: 'var(--text-2)', margin: '0 0 12px' }}>
-            Base score auto-assigned from event class. Full VisualScore = 0.60 × BaseScore + 0.40 × OpticalFlow — computed at training.
+            MergedVisualScore = 0.60 × BaseScore(event class) + 0.40 × OpticalFlow, computed once features are extracted for a clip. Falls back to the raw base score for clips not yet feature-extracted.
           </p>
           <table>
             <thead>

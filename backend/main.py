@@ -82,6 +82,7 @@ def _label_out(label: models.Label) -> Optional[schemas.LabelOut]:
         clip_id=label.clip_id,
         event_class=label.event_class,
         highlight_score=label.highlight_score,
+        merged_visual_score=label.merged_visual_score,
         t_start_adjusted=label.t_start_adjusted,
         t_end_adjusted=label.t_end_adjusted,
         notes=label.notes,
@@ -713,6 +714,7 @@ def _build_export_rows(db: Session):
             "window_size": clip.window_size,
             "event_class": lbl.event_class,
             "highlight_score": lbl.highlight_score,
+            "merged_visual_score": lbl.merged_visual_score,
             "t_start_adjusted": lbl.t_start_adjusted,
             "t_end_adjusted": lbl.t_end_adjusted,
             "notes": lbl.notes,
@@ -736,7 +738,7 @@ def export_csv(db: Session = Depends(get_db)):
     rows = _build_export_rows(db)
     fieldnames = [
         "clip_id", "clip_path", "match_id", "t_start", "t_end",
-        "window_size", "event_class", "highlight_score",
+        "window_size", "event_class", "highlight_score", "merged_visual_score",
         "t_start_adjusted", "t_end_adjusted", "notes",
     ]
     buf = StringIO()
@@ -767,7 +769,9 @@ def export_stats(db: Session = Depends(get_db)):
 
     bins = {"0.0-0.2": 0, "0.2-0.4": 0, "0.4-0.6": 0, "0.6-0.8": 0, "0.8-1.0": 0}
     for lbl in db.query(models.Label).all():
-        s = lbl.highlight_score
+        # Prefer the merged VisualScore (base + optical flow); fall back to the
+        # raw base score for clips that haven't had features extracted yet.
+        s = lbl.merged_visual_score if lbl.merged_visual_score is not None else lbl.highlight_score
         if s < 0.2:
             bins["0.0-0.2"] += 1
         elif s < 0.4:

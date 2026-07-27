@@ -30,13 +30,13 @@ const BASE_SCORES = {
 const SCORE_TABLE = [
   { key: "try", label: "Try", score: 1.0, window: "32s" },
   { key: "card_event", label: "Card Event", score: 1.0, window: "16s" },
-  { key: "goal_kick", label: "Goal Kick", score: 0.7814, window: "16–32s (8s for drop goals)" },
+  { key: "goal_kick", label: "Goal Kick", score: 0.7814, window: "32s" },
   { key: "tmo_replay", label: "TMO / Replay", score: 0.75, window: "32s" },
   { key: "penalty", label: "Penalty", score: 0.3546, window: "8s" },
-  { key: "maul", label: "Maul", score: 0.2353, window: "16–32s" },
+  { key: "maul", label: "Maul", score: 0.2353, window: "8s" },
   { key: "kick_off", label: "Kick Off", score: 0.1931, window: "8s" },
   { key: "scrum", label: "Scrum", score: 0.1461, window: "16s" },
-  { key: "lineout", label: "Lineout", score: 0.121, window: "8–16s" },
+  { key: "lineout", label: "Lineout", score: 0.121, window: "8s" },
   { key: "normal_play", label: "Normal Play", score: 0.0054, window: "any" },
 ];
 

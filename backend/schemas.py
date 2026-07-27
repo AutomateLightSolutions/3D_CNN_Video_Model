@@ -15,6 +15,7 @@ class LabelOut(BaseModel):
     clip_id: int
     event_class: str
     highlight_score: float
+    merged_visual_score: Optional[float] = None
     t_start_adjusted: float
     t_end_adjusted: float
     notes: Optional[str] = None
