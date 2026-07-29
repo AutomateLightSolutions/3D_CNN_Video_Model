@@ -163,7 +163,7 @@ def main():
     cur = {
         "train_loss": round(train_loss, 6), "val_loss": round(val_loss, 6),
         "val_accuracy": m["val_accuracy"], "macro_f1": m["macro_f1"],
-        "weighted_f1": m["weighted_f1"], "mae": m["mae"], "r2": m["r2"],
+        "weighted_f1": m["weighted_f1"], "mae": m["mae"], "mse": m["mse"], "r2": m["r2"],
     }
     metrics_payload.update({
         "status": "done",
@@ -171,7 +171,7 @@ def main():
         "best_epoch": 1,
         "best_val_loss": round(val_loss, 6),
         "current": cur,
-        "best": {**cur, "pearson": m["pearson"]},
+        "best": {**cur, "precision": m["precision"], "recall": m["recall"], "pearson": m["pearson"]},
         "per_class_f1": m["per_class_f1"],
         "confusion_matrix": m["confusion_matrix"],
         "feature_importance": feature_importance,

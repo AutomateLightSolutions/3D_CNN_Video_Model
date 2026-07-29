@@ -5,9 +5,15 @@ import argparse
 import json
 import signal
 import sys
+import os
 from datetime import datetime
 from pathlib import Path
 from collections import Counter
+
+import numpy as np
+import torch
+import torchvision.transforms.functional as TF
+from torch.utils.data import Dataset
 
 
 def parse_args():
@@ -73,6 +79,54 @@ def read_video_compat(clip_path):
     return torch.from_numpy(np.stack(frames))
 
 
+# Kinetics normalisation (same as R3D-18)
+MEAN = torch.tensor([0.45, 0.45, 0.45])
+STD  = torch.tensor([0.225, 0.225, 0.225])
+
+
+class SlowFastDataset(Dataset):
+    """Module-level (not nested in main()) so Windows' spawn-based DataLoader
+    workers can pickle/import it — a class defined inside a function can't be
+    resolved by name in a worker process, which silently breaks num_workers>0."""
+
+    def __init__(self, data):
+        self.data = data
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        clip_path, class_int, score = self.data[idx]
+        score_t = torch.tensor(score, dtype=torch.float32)
+
+        try:
+            video = read_video_compat(clip_path)
+        except Exception as exc:
+            print(f"Warning: cannot read {clip_path}: {exc}", flush=True)
+            slow = torch.zeros(3, SLOW_FRAMES, IMG_SIZE, IMG_SIZE)
+            fast = torch.zeros(3, FAST_FRAMES, IMG_SIZE, IMG_SIZE)
+            return slow, fast, class_int, score_t
+
+        T = video.shape[0]
+        if T == 0:
+            slow = torch.zeros(3, SLOW_FRAMES, IMG_SIZE, IMG_SIZE)
+            fast = torch.zeros(3, FAST_FRAMES, IMG_SIZE, IMG_SIZE)
+            return slow, fast, class_int, score_t
+
+        slow_idx = sample_pathway(T, SLOW_FRAMES)
+        fast_idx = sample_pathway(T, FAST_FRAMES)
+
+        def build_tensor(indices):
+            frames = video[indices].permute(0, 3, 1, 2).float() / 255.0  # (T, C, H, W)
+            frames = torch.stack([TF.resize(f, [IMG_SIZE, IMG_SIZE]) for f in frames])
+            frames = frames.permute(1, 0, 2, 3)  # (C, T, H, W)
+            for c_idx in range(3):
+                frames[c_idx] = (frames[c_idx] - MEAN[c_idx]) / STD[c_idx]
+            return frames
+
+        return build_tensor(slow_idx), build_tensor(fast_idx), class_int, score_t
+
+
 def main():
     args = parse_args()
 
@@ -104,6 +158,7 @@ def main():
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
 
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device} (requested: {args.device}, cuda_available: {torch.cuda.is_available()})", flush=True)
 
     db_engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False})
     Session   = sessionmaker(bind=db_engine)
@@ -128,48 +183,6 @@ def main():
     db.close()
     print(f"Train: {len(train_data)} | Val: {len(val_data)}")
 
-    # Kinetics normalisation (same as R3D-18)
-    MEAN = torch.tensor([0.45, 0.45, 0.45])
-    STD  = torch.tensor([0.225, 0.225, 0.225])
-
-    class SlowFastDataset(Dataset):
-        def __init__(self, data):
-            self.data = data
-
-        def __len__(self):
-            return len(self.data)
-
-        def __getitem__(self, idx):
-            clip_path, class_int, score = self.data[idx]
-            score_t = torch.tensor(score, dtype=torch.float32)
-
-            try:
-                video = read_video_compat(clip_path)
-            except Exception as exc:
-                print(f"Warning: cannot read {clip_path}: {exc}", flush=True)
-                slow = torch.zeros(3, SLOW_FRAMES, IMG_SIZE, IMG_SIZE)
-                fast = torch.zeros(3, FAST_FRAMES, IMG_SIZE, IMG_SIZE)
-                return slow, fast, class_int, score_t
-
-            T = video.shape[0]
-            if T == 0:
-                slow = torch.zeros(3, SLOW_FRAMES, IMG_SIZE, IMG_SIZE)
-                fast = torch.zeros(3, FAST_FRAMES, IMG_SIZE, IMG_SIZE)
-                return slow, fast, class_int, score_t
-
-            slow_idx = sample_pathway(T, SLOW_FRAMES)
-            fast_idx = sample_pathway(T, FAST_FRAMES)
-
-            def build_tensor(indices):
-                frames = video[indices].permute(0, 3, 1, 2).float() / 255.0  # (T, C, H, W)
-                frames = torch.stack([TF.resize(f, [IMG_SIZE, IMG_SIZE]) for f in frames])
-                frames = frames.permute(1, 0, 2, 3)  # (C, T, H, W)
-                for c_idx in range(3):
-                    frames[c_idx] = (frames[c_idx] - MEAN[c_idx]) / STD[c_idx]
-                return frames
-
-            return build_tensor(slow_idx), build_tensor(fast_idx), class_int, score_t
-
     train_ds = SlowFastDataset(train_data)
     val_ds   = SlowFastDataset(val_data)
 
@@ -177,8 +190,14 @@ def main():
     sample_weights = [1.0 / max(int_counts[ci], 1) for _, ci, _ in train_data]
     sampler        = WeightedRandomSampler(sample_weights, len(sample_weights))
 
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size, sampler=sampler,   num_workers=0, pin_memory=(str(device) == "cuda"))
-    val_loader   = DataLoader(val_ds,   batch_size=args.batch_size, shuffle=False, num_workers=0)
+    # num_workers>0 overlaps CPU video decoding with GPU compute instead of
+    # blocking on it every batch.
+    NUM_WORKERS = min(4, os.cpu_count() or 1)
+    train_loader = DataLoader(train_ds, batch_size=args.batch_size, sampler=sampler,
+                              num_workers=NUM_WORKERS, persistent_workers=(NUM_WORKERS > 0),
+                              pin_memory=(str(device) == "cuda"))
+    val_loader   = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False,
+                              num_workers=NUM_WORKERS, persistent_workers=(NUM_WORKERS > 0))
 
     train_class_names = [l.event_class for c, l in train_raw]
     class_weights     = compute_class_weights(train_class_names, HIGHLIGHT_CLASSES).to(device)

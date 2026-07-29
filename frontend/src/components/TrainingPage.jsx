@@ -43,7 +43,7 @@ function PerClassF1Table({ perClassF1 }) {
   const entries = Object.entries(perClassF1).sort((a, b) => b[1] - a[1])
   return (
     <div className="card">
-      <h2>Per-Class F1 — Best Model</h2>
+      <h2>Per-Class F1 — Event Classification Head</h2>
       <table className="score-guide-table">
         <thead>
           <tr><th>Event</th><th>F1 Score</th><th>Bar</th></tr>
@@ -187,8 +187,7 @@ export default function TrainingPage({ title, defaultEpochs, defaultBatch, api, 
   }
 
   const isRunning = status.status === 'running'
-  const cur  = metrics?.current  || {}
-  const best = metrics?.best     || {}
+  const best = metrics?.best || {}
 
   const fmt  = (v, digits = 4) => v != null ? Number(v).toFixed(digits) : '—'
   const fmtP = (v)             => v != null ? (Number(v) * 100).toFixed(1) + '%' : '—'
@@ -270,6 +269,9 @@ export default function TrainingPage({ title, defaultEpochs, defaultBatch, api, 
           </div>
           {extraControls}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 12, color: 'var(--text-2)' }}>
+              Epoch {metrics ? `${metrics.current_epoch ?? '—'} / ${metrics.total_epochs ?? '—'}` : '—'}
+            </span>
             <span className={`badge ${isRunning ? 'badge-green' : 'badge-gray'}`}>
               {isRunning ? 'Running' : (metrics?.status === 'done' ? 'Done' : 'Stopped')}
             </span>
@@ -277,39 +279,42 @@ export default function TrainingPage({ title, defaultEpochs, defaultBatch, api, 
             <button className="btn btn-danger"  onClick={handleStop}  disabled={!isRunning}>Stop</button>
           </div>
         </div>
-
-        {/* Current epoch metrics */}
-        <div className="metric-cards">
-          <MetricCard label="Epoch"       value={metrics ? `${metrics.current_epoch ?? '—'} / ${metrics.total_epochs ?? '—'}` : '—'} />
-          <MetricCard label="Train Loss"  value={fmt(cur.train_loss)} />
-          <MetricCard label="Val Loss"    value={fmt(cur.val_loss)} />
-          <MetricCard label="Val Acc"     value={fmtP(cur.val_accuracy)} color="var(--green)" />
-          <MetricCard label="Macro F1"    value={fmt(cur.macro_f1, 3)} color="#a855f7" />
-          <MetricCard label="MAE"         value={fmt(cur.mae, 4)} />
-          <MetricCard label="R²"          value={fmt(cur.r2, 4)} />
-        </div>
       </div>
 
-      {/* Best model summary */}
+      {/* Best model performance, grouped by prediction head */}
       {metrics?.best_epoch > 0 && (
         <div className="card" style={{ borderLeft: '3px solid var(--green)' }}>
-          <h2 style={{ marginBottom: 12 }}>Best Model — Epoch {metrics.best_epoch}</h2>
+          <h2 style={{ marginBottom: 4 }}>Best Model — Epoch {metrics.best_epoch}</h2>
+          <p style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 20 }}>
+            Combined Val Loss: {fmt(metrics.best_val_loss)}
+            {metrics.completed_at && <> · Completed: {new Date(metrics.completed_at).toLocaleString()}</>}
+          </p>
+
+          <h3 style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
+            Event Classification Head
+          </h3>
           <div className="metric-cards">
-            <MetricCard label="Val Loss"    value={fmt(metrics.best_val_loss)} />
-            <MetricCard label="Val Acc"     value={fmtP(best.val_accuracy)} color="var(--green)" />
-            <MetricCard label="Macro F1"    value={fmt(best.macro_f1, 3)}    color="#a855f7" />
-            <MetricCard label="Weighted F1" value={fmt(best.weighted_f1, 3)} />
-            <MetricCard label="MAE"         value={fmt(best.mae, 4)} />
-            <MetricCard label="R²"          value={fmt(best.r2, 4)} />
-            <MetricCard label="Pearson"     value={fmt(best.pearson, 4)} />
+            <MetricCard label="Val Accuracy" value={fmtP(best.val_accuracy)} color="var(--green)" />
+            <MetricCard label="Precision"    value={fmt(best.precision, 3)} />
+            <MetricCard label="Recall"       value={fmt(best.recall, 3)} />
+            <MetricCard label="Macro F1"     value={fmt(best.macro_f1, 3)}    color="#a855f7" />
+            <MetricCard label="Weighted F1"  value={fmt(best.weighted_f1, 3)} />
           </div>
-          {metrics.completed_at && (
-            <p style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 8 }}>
-              Completed: {new Date(metrics.completed_at).toLocaleString()}
-            </p>
-          )}
+
+          <h3 style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: 0.5, margin: '20px 0 8px' }}>
+            Highlight Score Regression Head
+          </h3>
+          <div className="metric-cards">
+            <MetricCard label="MAE"     value={fmt(best.mae, 4)} />
+            <MetricCard label="MSE"     value={fmt(best.mse, 4)} />
+            <MetricCard label="R²"      value={fmt(best.r2, 4)} />
+            <MetricCard label="Pearson" value={fmt(best.pearson, 4)} />
+          </div>
         </div>
       )}
+
+      <PerClassF1Table perClassF1={metrics?.per_class_f1} />
+      <FeatureImportanceTable importance={metrics?.feature_importance} />
 
       {/* Charts + log */}
       <div className="training-layout">
@@ -331,9 +336,6 @@ export default function TrainingPage({ title, defaultEpochs, defaultBatch, api, 
           </div>
         </div>
       </div>
-
-      <PerClassF1Table perClassF1={metrics?.per_class_f1} />
-      <FeatureImportanceTable importance={metrics?.feature_importance} />
     </div>
   )
 }

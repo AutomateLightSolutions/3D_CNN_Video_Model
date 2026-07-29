@@ -81,8 +81,11 @@ def visual_score_for(event_class: str, flow_mag: float) -> float:
 def compute_full_metrics(all_labels, all_preds, all_scores_true, all_scores_pred,
                           highlight_classes=None):
     """Identical metrics schema for every model: val_accuracy, macro/weighted
-    F1, MAE/R2/Pearson on the score head, per-class F1, confusion matrix."""
-    from sklearn.metrics import f1_score, confusion_matrix, accuracy_score
+    F1, precision/recall, MAE/R2/Pearson on the score head, per-class F1,
+    confusion matrix."""
+    from sklearn.metrics import (
+        f1_score, precision_score, recall_score, confusion_matrix, accuracy_score,
+    )
     from scipy.stats import pearsonr
 
     if highlight_classes is None:
@@ -92,6 +95,8 @@ def compute_full_metrics(all_labels, all_preds, all_scores_true, all_scores_pred
     val_accuracy = accuracy_score(all_labels, all_preds)
     macro_f1 = f1_score(all_labels, all_preds, average="macro", zero_division=0)
     weighted_f1 = f1_score(all_labels, all_preds, average="weighted", zero_division=0)
+    macro_precision = precision_score(all_labels, all_preds, average="macro", zero_division=0)
+    macro_recall = recall_score(all_labels, all_preds, average="macro", zero_division=0)
     per_class_f1 = f1_score(
         all_labels, all_preds, average=None, zero_division=0,
         labels=list(range(len(highlight_classes))),
@@ -102,6 +107,7 @@ def compute_full_metrics(all_labels, all_preds, all_scores_true, all_scores_pred
     mae = float(np.mean(np.abs(t - p)))
     ss_res = float(np.sum((t - p) ** 2))
     ss_tot = float(np.sum((t - t.mean()) ** 2))
+    mse = ss_res / len(t)
     r2 = 1.0 - ss_res / ss_tot if ss_tot > 1e-8 else 0.0
     pearson = float(pearsonr(t, p)[0]) if len(t) > 1 else 0.0
 
@@ -110,7 +116,10 @@ def compute_full_metrics(all_labels, all_preds, all_scores_true, all_scores_pred
         "val_accuracy": round(float(val_accuracy), 6),
         "macro_f1": round(float(macro_f1), 6),
         "weighted_f1": round(float(weighted_f1), 6),
+        "precision": round(float(macro_precision), 6),
+        "recall": round(float(macro_recall), 6),
         "mae": round(mae, 6),
+        "mse": round(mse, 6),
         "r2": round(r2, 6),
         "pearson": round(pearson, 6),
         "per_class_f1": {highlight_classes[i]: round(float(v), 6) for i, v in enumerate(per_class_f1)},

@@ -10,6 +10,11 @@ from datetime import datetime
 from pathlib import Path
 from collections import Counter
 
+import numpy as np
+import torch
+import torchvision.transforms.functional as TF
+from torch.utils.data import Dataset
+
 
 def parse_args():
     p = argparse.ArgumentParser()
@@ -87,6 +92,54 @@ def read_video_compat(clip_path):
     return torch.from_numpy(np.stack(frames))
 
 
+MEAN = torch.tensor([0.43216, 0.394666, 0.37645]).view(3, 1, 1, 1)
+STD  = torch.tensor([0.22803, 0.22145, 0.216989]).view(3, 1, 1, 1)
+
+
+class RugbyClipDataset(Dataset):
+    """Module-level (not nested in main()) so Windows' spawn-based DataLoader
+    workers can pickle/import it — a class defined inside a function can't be
+    resolved by name in a worker process, which silently breaks num_workers>0."""
+
+    def __init__(self, data, window_config, n_frames):
+        self.data = data  # list of (clip_path, window_size_s, class_int, score)
+        self.window_config = window_config
+        self.n_frames = n_frames
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        clip_path, window_size_s, class_int, score = self.data[idx]
+        score_t = torch.tensor(score, dtype=torch.float32)
+
+        ws = window_size_s if window_size_s in self.window_config else 8
+
+        try:
+            video = read_video_compat(clip_path)
+        except Exception as exc:
+            print(f"Warning: cannot read {clip_path}: {exc}", flush=True)
+            return torch.zeros(3, self.n_frames, 112, 112), class_int, score_t
+
+        T = video.shape[0]
+        if T == 0:
+            return torch.zeros(3, self.n_frames, 112, 112), class_int, score_t
+
+        indices = sample_frame_indices(T, ws, self.n_frames)
+
+        # Pad if fewer frames than needed
+        if len(indices) < self.n_frames:
+            pad = np.full(self.n_frames - len(indices), len(indices) - 1, dtype=int)
+            indices = np.concatenate([indices, pad])
+        indices = indices[:self.n_frames]
+
+        frames = video[indices].permute(0, 3, 1, 2).float() / 255.0  # (T, C, H, W)
+        frames = torch.stack([TF.resize(f, [112, 112]) for f in frames])  # (T, C, 112, 112)
+        frames = frames.permute(1, 0, 2, 3)  # (C, T, H, W)
+        frames = (frames - MEAN) / STD
+        return frames, class_int, score_t
+
+
 def main():
     args = parse_args()
 
@@ -110,6 +163,7 @@ def main():
     R3D_N_FRAMES = 16
 
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device} (requested: {args.device}, cuda_available: {torch.cuda.is_available()})", flush=True)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     features_dir = FEATURES_DIR
@@ -143,57 +197,23 @@ def main():
     db.close()
     print(f"Train: {len(train_data)} | Val: {len(val_data)}")
 
-    MEAN = torch.tensor([0.43216, 0.394666, 0.37645]).view(3, 1, 1, 1)
-    STD  = torch.tensor([0.22803, 0.22145, 0.216989]).view(3, 1, 1, 1)
-
-    class RugbyClipDataset(Dataset):
-        def __init__(self, data):
-            self.data = data  # list of (clip_path, window_size_s, class_int, score)
-
-        def __len__(self):
-            return len(self.data)
-
-        def __getitem__(self, idx):
-            clip_path, window_size_s, class_int, score = self.data[idx]
-            score_t = torch.tensor(score, dtype=torch.float32)
-
-            ws = window_size_s if window_size_s in WINDOW_CONFIG else 8
-
-            try:
-                video = read_video_compat(clip_path)
-            except Exception as exc:
-                print(f"Warning: cannot read {clip_path}: {exc}", flush=True)
-                return torch.zeros(3, R3D_N_FRAMES, 112, 112), class_int, score_t
-
-            T = video.shape[0]
-            if T == 0:
-                return torch.zeros(3, R3D_N_FRAMES, 112, 112), class_int, score_t
-
-            indices = sample_frame_indices(T, ws, R3D_N_FRAMES)
-
-            # Pad if fewer frames than needed
-            if len(indices) < R3D_N_FRAMES:
-                pad = np.full(R3D_N_FRAMES - len(indices), len(indices) - 1, dtype=int)
-                indices = np.concatenate([indices, pad])
-            indices = indices[:R3D_N_FRAMES]
-
-            frames = video[indices].permute(0, 3, 1, 2).float() / 255.0  # (T, C, H, W)
-            frames = torch.stack([TF.resize(f, [112, 112]) for f in frames])  # (T, C, 112, 112)
-            frames = frames.permute(1, 0, 2, 3)  # (C, T, H, W)
-            frames = (frames - MEAN) / STD
-            return frames, class_int, score_t
-
-    train_ds = RugbyClipDataset(train_data)
-    val_ds   = RugbyClipDataset(val_data)
+    train_ds = RugbyClipDataset(train_data, WINDOW_CONFIG, R3D_N_FRAMES)
+    val_ds   = RugbyClipDataset(val_data, WINDOW_CONFIG, R3D_N_FRAMES)
 
     # Class-weighted sampler
     int_counts = Counter(ci for _, _, ci, _ in train_data)
     sample_weights = [1.0 / max(int_counts[ci], 1) for _, _, ci, _ in train_data]
     sampler = WeightedRandomSampler(sample_weights, len(sample_weights))
 
+    # num_workers>0 overlaps CPU video decoding (cv2, single-clip-at-a-time)
+    # with GPU compute instead of blocking on it every batch — this is what
+    # was starving the GPU even after CUDA was working correctly.
+    NUM_WORKERS = min(4, os.cpu_count() or 1)
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, sampler=sampler,
-                              num_workers=0, pin_memory=(str(device) == "cuda"))
-    val_loader   = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=0)
+                              num_workers=NUM_WORKERS, persistent_workers=(NUM_WORKERS > 0),
+                              pin_memory=(str(device) == "cuda"))
+    val_loader   = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False,
+                              num_workers=NUM_WORKERS, persistent_workers=(NUM_WORKERS > 0))
 
     # Class weights for CE loss
     train_class_names = [l.event_class for c, l in train_raw]

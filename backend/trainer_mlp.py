@@ -206,11 +206,11 @@ def main():
         cur = {
             "train_loss": round(train_loss, 6), "val_loss": round(val_loss, 6),
             "val_accuracy": m["val_accuracy"], "macro_f1": m["macro_f1"],
-            "weighted_f1": m["weighted_f1"], "mae": m["mae"], "r2": m["r2"],
+            "weighted_f1": m["weighted_f1"], "mae": m["mae"], "mse": m["mse"], "r2": m["r2"],
         }
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            best_metrics  = {**cur, "pearson": m["pearson"]}
+            best_metrics  = {**cur, "precision": m["precision"], "recall": m["recall"], "pearson": m["pearson"]}
 
         metrics_payload.update({
             "current_epoch": epoch,
@@ -243,7 +243,9 @@ def main():
         "status": "done",
         "best": {
             "val_accuracy": m["val_accuracy"], "macro_f1": m["macro_f1"],
-            "weighted_f1": m["weighted_f1"], "mae": m["mae"], "r2": m["r2"],
+            "weighted_f1": m["weighted_f1"],
+            "precision": m["precision"], "recall": m["recall"],
+            "mae": m["mae"], "mse": m["mse"], "r2": m["r2"],
             "pearson": m["pearson"],
         },
         "per_class_f1": m["per_class_f1"],

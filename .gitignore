@@ -37,6 +37,10 @@ trainer.pid
 # ── ffmpeg binaries (downloaded by download_ffmpeg.py) ───────────────────────
 backend/bin/
 
+# ── Downloaded package wheels (e.g. CUDA torch install) ───────────────────────
+backend/wheels/
+*.whl
+
 # ── Node / Frontend ───────────────────────────────────────────────────────────
 frontend/node_modules/
 frontend/dist/
