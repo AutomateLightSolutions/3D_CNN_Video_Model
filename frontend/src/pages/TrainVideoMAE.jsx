@@ -20,6 +20,7 @@ export default function TrainVideoMAE() {
       defaultEpochs={20}
       defaultBatch={2}
       api={api}
+      modelType="videomae"
       extraControls={<FeatureExtractionPanel required={false} />}
     />
   )

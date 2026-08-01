@@ -52,6 +52,7 @@ export default function TrainHybrid() {
       defaultEpochs={30}
       defaultBatch={8}
       api={api}
+      modelType="hybrid"
       extraControls={extraControls}
     />
   )

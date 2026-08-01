@@ -79,3 +79,19 @@ class TrainingConfig(BaseModel):
     lr: float = 1e-3
     device: str = "cuda"
     backbone: str = "r3d"  # for trainer_hybrid: "r3d" | "videomae" | "slowfast"
+
+
+class TrainingRunOut(BaseModel):
+    id: int
+    model_type: str
+    backbone: Optional[str] = None
+    status: str
+    epochs: Optional[int] = None
+    batch_size: Optional[int] = None
+    lr: Optional[float] = None
+    device: Optional[str] = None
+    n_train: Optional[int] = None
+    n_val: Optional[int] = None
+    metrics: dict = {}
+    started_at: datetime
+    completed_at: Optional[datetime] = None

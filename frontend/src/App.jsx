@@ -8,6 +8,8 @@ import TrainSlowFast      from './pages/TrainSlowFast.jsx'
 import TrainRF            from './pages/TrainRF.jsx'
 import TrainMLP           from './pages/TrainMLP.jsx'
 import TrainHybrid        from './pages/TrainHybrid.jsx'
+import Compare            from './pages/Compare.jsx'
+import History            from './pages/History.jsx'
 import Export             from './pages/Export.jsx'
 
 const navCls = ({ isActive }) => isActive ? 'nav-item active' : 'nav-item'
@@ -29,6 +31,9 @@ export default function App() {
           <NavLink to="/training/rf"       className={navCls}>Interp + RF</NavLink>
           <NavLink to="/training/mlp"      className={navCls}>Interp + MLP</NavLink>
           <NavLink to="/training/hybrid"   className={navCls}>Interp + Deep</NavLink>
+          <div className="nav-group-label">Results</div>
+          <NavLink to="/compare"           className={navCls}>Compare</NavLink>
+          <NavLink to="/history"           className={navCls}>History</NavLink>
           <NavLink to="/export"            className={navCls}>Export</NavLink>
         </nav>
         <main className="main-content">
@@ -42,6 +47,8 @@ export default function App() {
             <Route path="/training/rf"       element={<TrainRF />} />
             <Route path="/training/mlp"      element={<TrainMLP />} />
             <Route path="/training/hybrid"   element={<TrainHybrid />} />
+            <Route path="/compare"           element={<Compare />} />
+            <Route path="/history"           element={<History />} />
             <Route path="/export"            element={<Export />} />
           </Routes>
         </main>

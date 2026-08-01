@@ -20,6 +20,7 @@ export default function TrainMLP() {
       defaultEpochs={30}
       defaultBatch={32}
       api={api}
+      modelType="mlp"
       extraControls={<FeatureExtractionPanel required={true} />}
     />
   )

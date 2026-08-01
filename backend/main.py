@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 import models
 import schemas
+import training_history
 from clip_extractor import run_extraction
 from config import (
     CLIPS_DIR, EXPORT_DIR,
@@ -32,7 +33,7 @@ from config import (
     HIGHLIGHT_CLASSES, WINDOW_SIZES, WINDOW_CONFIG,
     DB_PATH,
 )
-from database import Base, engine, get_db
+from database import Base, engine, get_db, SessionLocal
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,15 @@ _MATCH_NOT_FOUND = "Match not found"
 _CLIP_NOT_FOUND  = "Clip not found"
 
 Base.metadata.create_all(bind=engine)
+
+# Any TrainingRun still marked "running" belongs to a previous server
+# process (e.g. the app was killed mid-training) and can no longer be
+# trusted — sweep it to "stopped" once at startup.
+_startup_db = SessionLocal()
+try:
+    training_history.sweep_stale_running(_startup_db)
+finally:
+    _startup_db.close()
 
 for _d in [
     CLIPS_DIR, EXPORT_DIR,
@@ -135,13 +145,19 @@ def _launch_kwargs():
     return {"start_new_session": True}
 
 
-def _start_trainer(script_name: str, output_dir: Path, log_path: Path, pid_file: Path, cfg: schemas.TrainingConfig, extra_args: list = None):
+def _start_trainer(
+    script_name: str, output_dir: Path, log_path: Path, pid_file: Path, cfg: schemas.TrainingConfig,
+    db: Session, model_type: str, extra_args: list = None, backbone: str = None,
+):
     if pid_file.exists():
         try:
             pid = int(pid_file.read_text().strip())
             os.kill(pid, 0)
             return {"message": "Already running", "pid": pid}
-        except (ValueError, OSError):
+        except (ValueError, OSError, SystemError):
+            # SystemError: on some Windows/Python builds, os.kill(pid, 0) for a
+            # pid that no longer exists raises OSError wrapped as SystemError
+            # instead of a plain OSError — must be caught the same way.
             pid_file.unlink(missing_ok=True)
 
     script = Path(__file__).parent / script_name
@@ -176,31 +192,41 @@ def _start_trainer(script_name: str, output_dir: Path, log_path: Path, pid_file:
 
     log_fh.close()
     pid_file.write_text(str(proc.pid))
+    training_history.start_run(db, model_type, cfg, backbone=backbone)
     return {"message": "Training started", "pid": proc.pid}
 
 
-def _stop_trainer(pid_file: Path):
+def _stop_trainer(pid_file: Path, db: Session, model_type: str, metrics_path: Path):
     if not pid_file.exists():
         return {"message": "No training process found"}
     try:
         pid = int(pid_file.read_text().strip())
         os.kill(pid, signal.SIGTERM)
         pid_file.unlink(missing_ok=True)
+        training_history.mark_stopped(db, model_type, _trainer_metrics(metrics_path))
         return {"message": "Stopped", "pid": pid}
-    except (ValueError, OSError):
+    except (ValueError, OSError, SystemError):
         pid_file.unlink(missing_ok=True)
         return {"message": "Process not found, cleaned up"}
 
 
-def _trainer_status(pid_file: Path, log_path: Path) -> schemas.TrainingStatus:
+def _trainer_status(pid_file: Path, log_path: Path, db: Session, model_type: str, metrics_path: Path) -> schemas.TrainingStatus:
     running = False
     if pid_file.exists():
         try:
             pid = int(pid_file.read_text().strip())
             os.kill(pid, 0)
             running = True
-        except (ValueError, OSError):
+        except (ValueError, OSError, SystemError):
             pid_file.unlink(missing_ok=True)
+
+    metrics = _trainer_metrics(metrics_path)
+    if metrics.get("status") == "done":
+        # The trainer's own metrics.json is the authoritative source of truth
+        # for completion — os.kill(pid, 0) liveness checks are unreliable on
+        # Windows (a just-exited pid can still transiently look "alive").
+        running = False
+    training_history.finalize_if_stopped(db, model_type, running, metrics)
 
     current_epoch = train_loss = val_loss = val_acc = None
     if log_path.exists():
@@ -446,18 +472,18 @@ def list_labels(match_id: Optional[int] = None, db: Session = Depends(get_db)):
 # ---------------------------------------------------------------------------
 
 @app.post("/training/r3d/start")
-def start_r3d_training(cfg: schemas.TrainingConfig = schemas.TrainingConfig()):
-    return _start_trainer("trainer_r3d.py", R3D_MODEL_DIR, R3D_LOG_PATH, R3D_PID_FILE, cfg)
+def start_r3d_training(cfg: schemas.TrainingConfig = schemas.TrainingConfig(), db: Session = Depends(get_db)):
+    return _start_trainer("trainer_r3d.py", R3D_MODEL_DIR, R3D_LOG_PATH, R3D_PID_FILE, cfg, db, "r3d")
 
 
 @app.post("/training/r3d/stop")
-def stop_r3d_training():
-    return _stop_trainer(R3D_PID_FILE)
+def stop_r3d_training(db: Session = Depends(get_db)):
+    return _stop_trainer(R3D_PID_FILE, db, "r3d", R3D_METRICS_PATH)
 
 
 @app.get("/training/r3d/status", response_model=schemas.TrainingStatus)
-def r3d_training_status():
-    return _trainer_status(R3D_PID_FILE, R3D_LOG_PATH)
+def r3d_training_status(db: Session = Depends(get_db)):
+    return _trainer_status(R3D_PID_FILE, R3D_LOG_PATH, db, "r3d", R3D_METRICS_PATH)
 
 
 @app.get("/training/r3d/logs")
@@ -475,18 +501,18 @@ def r3d_training_metrics():
 # ---------------------------------------------------------------------------
 
 @app.post("/training/videomae/start")
-def start_videomae_training(cfg: schemas.TrainingConfig = schemas.TrainingConfig(epochs=20, batch_size=2)):
-    return _start_trainer("trainer_videomae.py", VIDEOMAE_MODEL_DIR, VIDEOMAE_LOG_PATH, VIDEOMAE_PID_FILE, cfg)
+def start_videomae_training(cfg: schemas.TrainingConfig = schemas.TrainingConfig(epochs=20, batch_size=2), db: Session = Depends(get_db)):
+    return _start_trainer("trainer_videomae.py", VIDEOMAE_MODEL_DIR, VIDEOMAE_LOG_PATH, VIDEOMAE_PID_FILE, cfg, db, "videomae")
 
 
 @app.post("/training/videomae/stop")
-def stop_videomae_training():
-    return _stop_trainer(VIDEOMAE_PID_FILE)
+def stop_videomae_training(db: Session = Depends(get_db)):
+    return _stop_trainer(VIDEOMAE_PID_FILE, db, "videomae", VIDEOMAE_METRICS_PATH)
 
 
 @app.get("/training/videomae/status", response_model=schemas.TrainingStatus)
-def videomae_training_status():
-    return _trainer_status(VIDEOMAE_PID_FILE, VIDEOMAE_LOG_PATH)
+def videomae_training_status(db: Session = Depends(get_db)):
+    return _trainer_status(VIDEOMAE_PID_FILE, VIDEOMAE_LOG_PATH, db, "videomae", VIDEOMAE_METRICS_PATH)
 
 
 @app.get("/training/videomae/logs")
@@ -504,18 +530,18 @@ def videomae_training_metrics():
 # ---------------------------------------------------------------------------
 
 @app.post("/training/slowfast/start")
-def start_slowfast_training(cfg: schemas.TrainingConfig = schemas.TrainingConfig(epochs=30, batch_size=2)):
-    return _start_trainer("trainer_slowfast.py", SLOWFAST_MODEL_DIR, SLOWFAST_LOG_PATH, SLOWFAST_PID_FILE, cfg)
+def start_slowfast_training(cfg: schemas.TrainingConfig = schemas.TrainingConfig(epochs=30, batch_size=2), db: Session = Depends(get_db)):
+    return _start_trainer("trainer_slowfast.py", SLOWFAST_MODEL_DIR, SLOWFAST_LOG_PATH, SLOWFAST_PID_FILE, cfg, db, "slowfast")
 
 
 @app.post("/training/slowfast/stop")
-def stop_slowfast_training():
-    return _stop_trainer(SLOWFAST_PID_FILE)
+def stop_slowfast_training(db: Session = Depends(get_db)):
+    return _stop_trainer(SLOWFAST_PID_FILE, db, "slowfast", SLOWFAST_METRICS_PATH)
 
 
 @app.get("/training/slowfast/status", response_model=schemas.TrainingStatus)
-def slowfast_training_status():
-    return _trainer_status(SLOWFAST_PID_FILE, SLOWFAST_LOG_PATH)
+def slowfast_training_status(db: Session = Depends(get_db)):
+    return _trainer_status(SLOWFAST_PID_FILE, SLOWFAST_LOG_PATH, db, "slowfast", SLOWFAST_METRICS_PATH)
 
 
 @app.get("/training/slowfast/logs")
@@ -543,7 +569,7 @@ def start_feature_extraction():
             pid = int(_FEATURE_PID_FILE.read_text().strip())
             os.kill(pid, 0)
             return {"message": "Already running", "pid": pid}
-        except (ValueError, OSError):
+        except (ValueError, OSError, SystemError):
             _FEATURE_PID_FILE.unlink(missing_ok=True)
 
     script = Path(__file__).parent / "feature_extractor.py"
@@ -578,7 +604,7 @@ def feature_extraction_status():
             pid = int(_FEATURE_PID_FILE.read_text().strip())
             os.kill(pid, 0)
             running = True
-        except (ValueError, OSError):
+        except (ValueError, OSError, SystemError):
             _FEATURE_PID_FILE.unlink(missing_ok=True)
 
     progress = {"total": 0, "done": 0, "status": "idle"}
@@ -611,18 +637,18 @@ def feature_extraction_logs():
 # ---------------------------------------------------------------------------
 
 @app.post("/training/rf/start")
-def start_rf_training(cfg: schemas.TrainingConfig = schemas.TrainingConfig(epochs=10, batch_size=0)):
-    return _start_trainer("trainer_rf.py", RF_MODEL_DIR, RF_LOG_PATH, RF_PID_FILE, cfg)
+def start_rf_training(cfg: schemas.TrainingConfig = schemas.TrainingConfig(epochs=10, batch_size=0), db: Session = Depends(get_db)):
+    return _start_trainer("trainer_rf.py", RF_MODEL_DIR, RF_LOG_PATH, RF_PID_FILE, cfg, db, "rf")
 
 
 @app.post("/training/rf/stop")
-def stop_rf_training():
-    return _stop_trainer(RF_PID_FILE)
+def stop_rf_training(db: Session = Depends(get_db)):
+    return _stop_trainer(RF_PID_FILE, db, "rf", RF_METRICS_PATH)
 
 
 @app.get("/training/rf/status", response_model=schemas.TrainingStatus)
-def rf_training_status():
-    return _trainer_status(RF_PID_FILE, RF_LOG_PATH)
+def rf_training_status(db: Session = Depends(get_db)):
+    return _trainer_status(RF_PID_FILE, RF_LOG_PATH, db, "rf", RF_METRICS_PATH)
 
 
 @app.get("/training/rf/logs")
@@ -640,18 +666,18 @@ def rf_training_metrics():
 # ---------------------------------------------------------------------------
 
 @app.post("/training/mlp/start")
-def start_mlp_training(cfg: schemas.TrainingConfig = schemas.TrainingConfig(epochs=30, batch_size=32)):
-    return _start_trainer("trainer_mlp.py", MLP_MODEL_DIR, MLP_LOG_PATH, MLP_PID_FILE, cfg)
+def start_mlp_training(cfg: schemas.TrainingConfig = schemas.TrainingConfig(epochs=30, batch_size=32), db: Session = Depends(get_db)):
+    return _start_trainer("trainer_mlp.py", MLP_MODEL_DIR, MLP_LOG_PATH, MLP_PID_FILE, cfg, db, "mlp")
 
 
 @app.post("/training/mlp/stop")
-def stop_mlp_training():
-    return _stop_trainer(MLP_PID_FILE)
+def stop_mlp_training(db: Session = Depends(get_db)):
+    return _stop_trainer(MLP_PID_FILE, db, "mlp", MLP_METRICS_PATH)
 
 
 @app.get("/training/mlp/status", response_model=schemas.TrainingStatus)
-def mlp_training_status():
-    return _trainer_status(MLP_PID_FILE, MLP_LOG_PATH)
+def mlp_training_status(db: Session = Depends(get_db)):
+    return _trainer_status(MLP_PID_FILE, MLP_LOG_PATH, db, "mlp", MLP_METRICS_PATH)
 
 
 @app.get("/training/mlp/logs")
@@ -669,21 +695,21 @@ def mlp_training_metrics():
 # ---------------------------------------------------------------------------
 
 @app.post("/training/hybrid/start")
-def start_hybrid_training(cfg: schemas.TrainingConfig = schemas.TrainingConfig(epochs=30, batch_size=32)):
+def start_hybrid_training(cfg: schemas.TrainingConfig = schemas.TrainingConfig(epochs=30, batch_size=32), db: Session = Depends(get_db)):
     return _start_trainer(
-        "trainer_hybrid.py", HYBRID_MODEL_DIR, HYBRID_LOG_PATH, HYBRID_PID_FILE, cfg,
-        extra_args=["--backbone", cfg.backbone],
+        "trainer_hybrid.py", HYBRID_MODEL_DIR, HYBRID_LOG_PATH, HYBRID_PID_FILE, cfg, db, "hybrid",
+        extra_args=["--backbone", cfg.backbone], backbone=cfg.backbone,
     )
 
 
 @app.post("/training/hybrid/stop")
-def stop_hybrid_training():
-    return _stop_trainer(HYBRID_PID_FILE)
+def stop_hybrid_training(db: Session = Depends(get_db)):
+    return _stop_trainer(HYBRID_PID_FILE, db, "hybrid", HYBRID_METRICS_PATH)
 
 
 @app.get("/training/hybrid/status", response_model=schemas.TrainingStatus)
-def hybrid_training_status():
-    return _trainer_status(HYBRID_PID_FILE, HYBRID_LOG_PATH)
+def hybrid_training_status(db: Session = Depends(get_db)):
+    return _trainer_status(HYBRID_PID_FILE, HYBRID_LOG_PATH, db, "hybrid", HYBRID_METRICS_PATH)
 
 
 @app.get("/training/hybrid/logs")
@@ -694,6 +720,41 @@ def hybrid_training_logs():
 @app.get("/training/hybrid/metrics")
 def hybrid_training_metrics():
     return _trainer_metrics(HYBRID_METRICS_PATH)
+
+
+# ---------------------------------------------------------------------------
+# Training History
+# ---------------------------------------------------------------------------
+
+def _run_out(run: models.TrainingRun) -> schemas.TrainingRunOut:
+    try:
+        metrics = json.loads(run.metrics_json) if run.metrics_json else {}
+    except json.JSONDecodeError:
+        metrics = {}
+    return schemas.TrainingRunOut(
+        id=run.id, model_type=run.model_type, backbone=run.backbone, status=run.status,
+        epochs=run.epochs, batch_size=run.batch_size, lr=run.lr, device=run.device,
+        n_train=run.n_train, n_val=run.n_val, metrics=metrics,
+        started_at=run.started_at, completed_at=run.completed_at,
+    )
+
+
+@app.get("/history/runs", response_model=List[schemas.TrainingRunOut])
+def list_training_runs(model_type: Optional[str] = None, db: Session = Depends(get_db)):
+    return [_run_out(r) for r in training_history.list_runs(db, model_type)]
+
+
+@app.delete("/history/runs/{run_id}")
+def delete_training_run(run_id: int, db: Session = Depends(get_db)):
+    if not training_history.delete_run(db, run_id):
+        raise HTTPException(status_code=404, detail="Training run not found")
+    return {"message": "Run deleted"}
+
+
+@app.get("/history/leaderboard", response_model=List[schemas.TrainingRunOut])
+def training_leaderboard(db: Session = Depends(get_db)):
+    latest = training_history.latest_completed_per_model(db)
+    return [_run_out(r) for r in latest.values()]
 
 
 # ---------------------------------------------------------------------------

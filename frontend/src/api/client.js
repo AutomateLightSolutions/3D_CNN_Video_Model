@@ -113,6 +113,15 @@ export const getHybridTrainingStatus  = ()  => _hybrid.status()
 export const getHybridTrainingLogs    = ()  => _hybrid.logs()
 export const getHybridTrainingMetrics = ()  => _hybrid.metrics()
 
+// --- Training History ---
+export const listTrainingRuns = (modelType) => {
+  const p = new URLSearchParams()
+  if (modelType) p.set('model_type', modelType)
+  return req(`/history/runs?${p}`)
+}
+export const deleteTrainingRun = (id) => req(`/history/runs/${id}`, { method: 'DELETE' })
+export const getLeaderboard    = ()   => req('/history/leaderboard')
+
 // --- Feature Extraction ---
 export const startFeatureExtraction     = ()  => req('/features/extract', { method: 'POST' })
 export const stopFeatureExtraction      = ()  => req('/features/stop',   { method: 'POST' })

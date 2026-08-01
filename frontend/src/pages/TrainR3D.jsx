@@ -20,6 +20,7 @@ export default function TrainR3D() {
       defaultEpochs={40}
       defaultBatch={4}
       api={api}
+      modelType="r3d"
       extraControls={<FeatureExtractionPanel required={false} />}
     />
   )

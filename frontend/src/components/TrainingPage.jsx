@@ -1,10 +1,12 @@
 import { useState, useEffect, useRef } from 'react'
+import { Link } from 'react-router-dom'
 import {
   Chart as ChartJS,
   CategoryScale, LinearScale, PointElement, LineElement,
   Title, Tooltip, Legend,
 } from 'chart.js'
 import { Line } from 'react-chartjs-2'
+import { BestMetricsPanel, PerClassF1Table, FeatureImportanceTable } from './MetricsDisplay.jsx'
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend)
 
@@ -27,77 +29,7 @@ function parseLog(lines) {
   return { epochs, trainLoss, valLoss, valAcc, macroF1 }
 }
 
-function MetricCard({ label, value, color }) {
-  return (
-    <div className="metric-card">
-      <div className="label">{label}</div>
-      <div className="value" style={color ? { color } : {}}>
-        {value ?? '—'}
-      </div>
-    </div>
-  )
-}
-
-function PerClassF1Table({ perClassF1 }) {
-  if (!perClassF1 || Object.keys(perClassF1).length === 0) return null
-  const entries = Object.entries(perClassF1).sort((a, b) => b[1] - a[1])
-  return (
-    <div className="card">
-      <h2>Per-Class F1 — Event Classification Head</h2>
-      <table className="score-guide-table">
-        <thead>
-          <tr><th>Event</th><th>F1 Score</th><th>Bar</th></tr>
-        </thead>
-        <tbody>
-          {entries.map(([cls, f1]) => (
-            <tr key={cls}>
-              <td style={{ textTransform: 'capitalize' }}>{cls.replace(/_/g, ' ')}</td>
-              <td>{f1.toFixed(3)}</td>
-              <td style={{ width: 120 }}>
-                <div style={{
-                  height: 8, borderRadius: 4,
-                  background: `linear-gradient(to right, var(--green) ${(f1 * 100).toFixed(0)}%, var(--surface-2) ${(f1 * 100).toFixed(0)}%)`,
-                }} />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
-}
-
-function FeatureImportanceTable({ importance }) {
-  if (!importance || Object.keys(importance).length === 0) return null
-  const entries = Object.entries(importance).sort((a, b) => b[1] - a[1]).slice(0, 15)
-  const maxVal = entries[0]?.[1] || 1
-  return (
-    <div className="card">
-      <h2>Feature Importance (Top 15)</h2>
-      <table className="score-guide-table">
-        <thead>
-          <tr><th>Feature</th><th>Importance</th><th>Bar</th></tr>
-        </thead>
-        <tbody>
-          {entries.map(([feat, imp]) => (
-            <tr key={feat}>
-              <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{feat.replace(/_/g, ' ')}</td>
-              <td>{(imp * 100).toFixed(1)}%</td>
-              <td style={{ width: 140 }}>
-                <div style={{
-                  height: 8, borderRadius: 4,
-                  background: `linear-gradient(to right, #a855f7 ${(imp / maxVal * 100).toFixed(0)}%, var(--surface-2) ${(imp / maxVal * 100).toFixed(0)}%)`,
-                }} />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
-}
-
-export default function TrainingPage({ title, defaultEpochs, defaultBatch, api, extraControls }) {
+export default function TrainingPage({ title, defaultEpochs, defaultBatch, api, extraControls, modelType }) {
   const [epochs,    setEpochs]    = useState(defaultEpochs)
   const [batchSize, setBatchSize] = useState(defaultBatch)
   const [lr,        setLr]        = useState('1e-3')
@@ -189,9 +121,6 @@ export default function TrainingPage({ title, defaultEpochs, defaultBatch, api, 
   const isRunning = status.status === 'running'
   const best = metrics?.best || {}
 
-  const fmt  = (v, digits = 4) => v != null ? Number(v).toFixed(digits) : '—'
-  const fmtP = (v)             => v != null ? (Number(v) * 100).toFixed(1) + '%' : '—'
-
   const chartOptions = {
     responsive: true,
     animation: false,
@@ -222,7 +151,14 @@ export default function TrainingPage({ title, defaultEpochs, defaultBatch, api, 
 
   return (
     <div>
-      <h1>{title}</h1>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 8 }}>
+        <h1>{title}</h1>
+        {modelType && (
+          <Link to={`/history?model=${modelType}`} style={{ fontSize: 12, color: 'var(--accent)', textDecoration: 'none', marginBottom: 20 }}>
+            View full history →
+          </Link>
+        )}
+      </div>
       {error && <div className="error-box">{error}</div>}
 
       {/* Controls + live metrics */}
@@ -282,36 +218,12 @@ export default function TrainingPage({ title, defaultEpochs, defaultBatch, api, 
       </div>
 
       {/* Best model performance, grouped by prediction head */}
-      {metrics?.best_epoch > 0 && (
-        <div className="card" style={{ borderLeft: '3px solid var(--green)' }}>
-          <h2 style={{ marginBottom: 4 }}>Best Model — Epoch {metrics.best_epoch}</h2>
-          <p style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 20 }}>
-            Combined Val Loss: {fmt(metrics.best_val_loss)}
-            {metrics.completed_at && <> · Completed: {new Date(metrics.completed_at).toLocaleString()}</>}
-          </p>
-
-          <h3 style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
-            Event Classification Head
-          </h3>
-          <div className="metric-cards">
-            <MetricCard label="Val Accuracy" value={fmtP(best.val_accuracy)} color="var(--green)" />
-            <MetricCard label="Precision"    value={fmt(best.precision, 3)} />
-            <MetricCard label="Recall"       value={fmt(best.recall, 3)} />
-            <MetricCard label="Macro F1"     value={fmt(best.macro_f1, 3)}    color="#a855f7" />
-            <MetricCard label="Weighted F1"  value={fmt(best.weighted_f1, 3)} />
-          </div>
-
-          <h3 style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: 0.5, margin: '20px 0 8px' }}>
-            Highlight Score Regression Head
-          </h3>
-          <div className="metric-cards">
-            <MetricCard label="MAE"     value={fmt(best.mae, 4)} />
-            <MetricCard label="MSE"     value={fmt(best.mse, 4)} />
-            <MetricCard label="R²"      value={fmt(best.r2, 4)} />
-            <MetricCard label="Pearson" value={fmt(best.pearson, 4)} />
-          </div>
-        </div>
-      )}
+      <BestMetricsPanel
+        best={best}
+        bestEpoch={metrics?.best_epoch}
+        bestValLoss={metrics?.best_val_loss}
+        completedAt={metrics?.completed_at}
+      />
 
       <PerClassF1Table perClassF1={metrics?.per_class_f1} />
       <FeatureImportanceTable importance={metrics?.feature_importance} />

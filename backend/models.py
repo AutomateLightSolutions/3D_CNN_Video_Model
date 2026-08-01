@@ -33,6 +33,30 @@ class Clip(Base):
     label = relationship("Label", back_populates="clip", uselist=False, cascade="all, delete-orphan")
 
 
+class TrainingRun(Base):
+    """One row per training run (one per Start click), across all 6 model
+    families. Unlike each trainer's own metrics.json — which is overwritten
+    every run — this is the permanent, deletable history record."""
+    __tablename__ = "training_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    model_type = Column(String, nullable=False)   # "r3d" | "videomae" | "slowfast" | "rf" | "mlp" | "hybrid"
+    backbone = Column(String, nullable=True)       # set only for "hybrid"
+    status = Column(String, default="running")     # "running" | "completed" | "stopped"
+
+    epochs = Column(Integer, nullable=True)
+    batch_size = Column(Integer, nullable=True)
+    lr = Column(Float, nullable=True)
+    device = Column(String, nullable=True)
+
+    n_train = Column(Integer, nullable=True)
+    n_val = Column(Integer, nullable=True)
+    metrics_json = Column(String, nullable=True)   # JSON blob: best/per_class_f1/confusion_matrix/feature_importance
+
+    started_at = Column(DateTime, default=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+
 class Label(Base):
     __tablename__ = "labels"
 

@@ -20,6 +20,7 @@ export default function TrainSlowFast() {
       defaultEpochs={30}
       defaultBatch={2}
       api={api}
+      modelType="slowfast"
       extraControls={<FeatureExtractionPanel required={false} />}
     />
   )

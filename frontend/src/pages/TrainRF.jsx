@@ -20,6 +20,7 @@ export default function TrainRF() {
       defaultEpochs={10}
       defaultBatch={0}
       api={api}
+      modelType="rf"
       extraControls={<FeatureExtractionPanel required={true} />}
     />
   )
