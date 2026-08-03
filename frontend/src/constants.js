@@ -15,4 +15,11 @@ export const STATUS_BADGE = {
   running:   'badge-blue',
   completed: 'badge-green',
   stopped:   'badge-red',
+  error:     'badge-red',
+}
+
+// Predict page tabs — mirrors the sidebar's "Deep Learning" / "Interpretable" split.
+export const PREDICTION_TABS = {
+  deep:          { label: 'Deep Learning', models: ['r3d', 'videomae', 'slowfast'] },
+  interpretable: { label: 'Interpretable', models: ['rf', 'mlp', 'hybrid'] },
 }

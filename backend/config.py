@@ -93,3 +93,25 @@ WINDOW_SIZES = [8, 16, 32]
 
 CLIP_FPS = 25
 CLIP_RESOLUTION = 224
+
+# ---------------------------------------------------------------------------
+# Full-match prediction ("Predict" feature)
+# ---------------------------------------------------------------------------
+
+# Nested under CLIPS_DIR so the existing /media StaticFiles mount + _clip_url()
+# helper in main.py serve prediction clips without any extra wiring.
+PREDICTIONS_DIR = CLIPS_DIR / "_predictions"
+
+TILE_SIZE = 8  # seconds — the merged-timeline resolution
+
+# Minimum labeled examples a (window_size, event_class) pair needs in the DB
+# before that window size is trusted to vote for that class during merge.
+# Placeholder — revisit once real per-window label volumes are known.
+CLASS_SUPPORT_MIN_COUNT = 5
+
+# Merge weights favoring the finest (8s) window; renormalized over whichever
+# windows actually contribute for a given tile (see inference.py).
+SCORE_MERGE_WEIGHTS = {8: 0.6, 16: 0.3, 32: 0.1}
+CLASS_VOTE_WEIGHTS  = {8: 0.6, 16: 0.3, 32: 0.1}
+
+PREDICTION_MODEL_TYPES = ("r3d", "videomae", "slowfast", "rf", "mlp", "hybrid")

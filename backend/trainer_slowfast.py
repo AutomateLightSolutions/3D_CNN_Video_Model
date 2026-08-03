@@ -141,11 +141,8 @@ def main():
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
 
-    try:
-        from pytorchvideo.models import create_slowfast
-        _USE_PYTORCHVIDEO = True
-    except ImportError:
-        _USE_PYTORCHVIDEO = False
+    from model_defs import SlowFastHighlightModel, _USE_PYTORCHVIDEO
+    if not _USE_PYTORCHVIDEO:
         print("WARNING: pytorchvideo not installed. Falling back to torch.hub for SlowFast.", flush=True)
 
     from config import DB_PATH, SLOWFAST_MODEL_DIR, HIGHLIGHT_CLASSES, WINDOW_CONFIG, SLOWFAST_METRICS_PATH, FEATURES_DIR
@@ -202,63 +199,6 @@ def main():
     train_class_names = [l.event_class for c, l in train_raw]
     class_weights     = compute_class_weights(train_class_names, HIGHLIGHT_CLASSES).to(device)
     num_classes       = len(HIGHLIGHT_CLASSES)
-
-    class SlowFastHighlightModel(nn.Module):
-        """SlowFast R50 backbone with dual classification + regression head."""
-
-        def __init__(self, num_classes):
-            super().__init__()
-            loaded = False
-
-            if _USE_PYTORCHVIDEO:
-                try:
-                    from pytorchvideo.models.hub import slowfast_r50
-                    base    = slowfast_r50(pretrained=True)
-                    # Remove final projection head; keep blocks up to the pooling stage
-                    self.backbone = nn.Sequential(*list(base.blocks[:-1]))
-                    feat_dim = 2304  # SlowFast R50 concatenated feat dim
-                    loaded = True
-                    print("Loaded pretrained SlowFast R50 (pytorchvideo).", flush=True)
-                except Exception as e:
-                    print(f"pytorchvideo load failed: {e}", flush=True)
-
-            if not loaded:
-                # torch.hub fallback
-                try:
-                    base = torch.hub.load(
-                        "facebookresearch/pytorchvideo",
-                        "slowfast_r50",
-                        pretrained=True,
-                        verbose=False,
-                    )
-                    self.backbone = nn.Sequential(*list(base.blocks[:-1]))
-                    feat_dim = 2304
-                    loaded = True
-                    print("Loaded pretrained SlowFast R50 (torch.hub).", flush=True)
-                except Exception as e:
-                    print(f"WARNING: could not load pretrained SlowFast weights ({e}). Training from random init.", flush=True)
-                    base = torch.hub.load(
-                        "facebookresearch/pytorchvideo",
-                        "slowfast_r50",
-                        pretrained=False,
-                        verbose=False,
-                    )
-                    self.backbone = nn.Sequential(*list(base.blocks[:-1]))
-                    feat_dim = 2304
-
-            self.pool       = nn.AdaptiveAvgPool3d(1)
-            self.class_head = nn.Linear(feat_dim, num_classes)
-            self.score_head = nn.Sequential(nn.Linear(feat_dim, 1), nn.Sigmoid())
-
-        def forward(self, slow, fast):
-            # SlowFast backbone expects a list [slow, fast]
-            feat = self.backbone([slow, fast])
-            # feat is a list from the last block; take the concatenated output
-            if isinstance(feat, (list, tuple)):
-                feat = torch.cat([self.pool(f).flatten(1) for f in feat], dim=1)
-            else:
-                feat = self.pool(feat).flatten(1)
-            return self.class_head(feat), self.score_head(feat).squeeze(1)
 
     model    = SlowFastHighlightModel(num_classes).to(device)
     ce_loss  = nn.CrossEntropyLoss(weight=class_weights)

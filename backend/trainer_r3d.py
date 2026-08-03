@@ -157,10 +157,7 @@ def main():
 
     from config import DB_PATH, R3D_MODEL_DIR, HIGHLIGHT_CLASSES, WINDOW_CONFIG, R3D_METRICS_PATH, FEATURES_DIR
     from training_common import load_labeled_split, class_int_for, visual_score_for, compute_full_metrics
-
-    # R3D-18 requires a fixed temporal dimension. 16 frames is the Kinetics standard.
-    # The sampling strategy (uniform vs dense-end) still encodes temporal context per window size.
-    R3D_N_FRAMES = 16
+    from model_defs import R3DHighlightModel, R3D_N_FRAMES
 
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device} (requested: {args.device}, cuda_available: {torch.cuda.is_available()})", flush=True)
@@ -221,24 +218,6 @@ def main():
 
     # Model with dual head
     num_classes = len(HIGHLIGHT_CLASSES)  # 23
-
-    class R3DHighlightModel(nn.Module):
-        def __init__(self, num_classes: int):
-            super().__init__()
-            try:
-                backbone = r3d_18(weights=R3D_18_Weights.KINETICS400_V1)
-                print("Loaded pretrained R3D-18 weights from cache.", flush=True)
-            except OSError as e:
-                print(f"WARNING: could not load pretrained weights ({e})."
-                      " Training from random initialisation.", flush=True)
-                backbone = r3d_18(weights=None)
-            self.backbone   = nn.Sequential(*list(backbone.children())[:-1])
-            self.class_head = nn.Linear(512, num_classes)
-            self.score_head = nn.Sequential(nn.Linear(512, 1), nn.Sigmoid())
-
-        def forward(self, x):
-            feat = self.backbone(x).flatten(1)
-            return self.class_head(feat), self.score_head(feat).squeeze(1)
 
     model    = R3DHighlightModel(num_classes).to(device)
     ce_loss  = nn.CrossEntropyLoss(weight=class_weights)

@@ -132,3 +132,17 @@ export const getFeatureExtractionLogs   = ()  => req('/features/logs')
 export const getExportStats = () => req('/export/stats')
 export const downloadJson   = () => { globalThis.location.href = `${BASE}/export/json` }
 export const downloadCsv    = () => { globalThis.location.href = `${BASE}/export/csv` }
+
+// --- Predictions (full-match multi-window inference) ---
+export const getAvailableModels    = ()        => req('/predictions/available-models')
+export const startPrediction       = (cfg)     => req('/predictions/start', json(cfg))
+export const listPredictionRuns    = (matchId) => {
+  const p = new URLSearchParams()
+  if (matchId) p.set('match_id', matchId)
+  return req(`/predictions?${p}`)
+}
+export const getPredictionRun      = (id) => req(`/predictions/${id}`)
+export const getPredictionProgress = (id) => req(`/predictions/${id}/progress`)
+export const getPredictionLog      = (id) => req(`/predictions/${id}/log`)
+export const getPredictionSegments = (id) => req(`/predictions/${id}/segments`)
+export const deletePredictionRun   = (id) => req(`/predictions/${id}`, { method: 'DELETE' })

@@ -1,0 +1,512 @@
+#!/usr/bin/env python3
+"""Full-match multi-window prediction ("Predict" feature).
+
+Given a registered Match and a chosen trained model_type, tiles the whole
+match into non-overlapping 8s segments (TILE_SIZE), extracts an aligned
+8s/16s/32s clip per tile (16s/32s centered on the tile, clamped at video
+boundaries), runs the chosen model on all 3, and merges them into one
+(event_class, highlight_score) per tile:
+
+  - Score merge: fixed-weight average favoring the 8s window (SCORE_MERGE_WEIGHTS).
+  - Class merge: masked weighted vote. Different window sizes have training-
+    label coverage for different event classes (e.g. scrum only ever
+    labeled at 16s) — class_support_sets() computes, from the live DB, which
+    classes each window size actually has enough labeled examples for, and
+    merge_class() zeroes out a window's vote for any class outside its
+    support set before combining. This stops a window from ever "voting"
+    for a class it has no training signal for.
+
+Raw per-window predictions are kept (PredictionWindowResult) alongside the
+merged result (PredictionSegment) for debugging/audit.
+
+Mirrors clip_extractor.run_extraction's structure: a BackgroundTask
+entrypoint with its own DB session, its own log file, and a progress.json
+the status route polls.
+"""
+
+import json
+import os
+from datetime import datetime
+from pathlib import Path
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+
+import model_defs
+import models
+from clip_extractor import extract_clip, get_video_info
+from config import (
+    CLASS_SUPPORT_MIN_COUNT, CLASS_VOTE_WEIGHTS, HIGHLIGHT_CLASSES,
+    HYBRID_MODEL_DIR, MLP_MODEL_DIR, PREDICTIONS_DIR, R3D_MODEL_DIR,
+    RF_MODEL_DIR, SCORE_MERGE_WEIGHTS, SLOWFAST_MODEL_DIR, TILE_SIZE,
+    VIDEOMAE_MODEL_DIR, WINDOW_SIZES,
+)
+
+
+# ---------------------------------------------------------------------------
+# Class support sets (dynamic, from live DB — not hardcoded)
+# ---------------------------------------------------------------------------
+
+def class_support_sets(db, floor: int = CLASS_SUPPORT_MIN_COUNT) -> dict:
+    """{window_size: set(event_class, ...)} — which classes each window size
+    has >= floor labeled examples for, right now, in the live DB."""
+    from sqlalchemy import func
+
+    rows = (
+        db.query(models.Clip.window_size, models.Label.event_class, func.count(models.Label.id))
+        .join(models.Label, models.Clip.id == models.Label.clip_id)
+        .group_by(models.Clip.window_size, models.Label.event_class)
+        .having(func.count(models.Label.id) >= floor)
+        .all()
+    )
+    result = {ws: set() for ws in WINDOW_SIZES}
+    for ws, event_class, _count in rows:
+        result.setdefault(ws, set()).add(event_class)
+    return result
+
+
+def available_models() -> dict:
+    """Per model_type: whether a usable checkpoint exists on disk."""
+    return {
+        "r3d": (R3D_MODEL_DIR / "best_model.pt").exists(),
+        "videomae": (VIDEOMAE_MODEL_DIR / "best_model.pt").exists(),
+        "slowfast": (SLOWFAST_MODEL_DIR / "best_model.pt").exists(),
+        "rf": (RF_MODEL_DIR / "best_model.pkl").exists(),
+        "mlp": (MLP_MODEL_DIR / "best_model.pt").exists(),
+        "hybrid": (HYBRID_MODEL_DIR / "best_model.pt").exists(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tiling
+# ---------------------------------------------------------------------------
+
+def build_tiles(duration: float, tile_size: int = TILE_SIZE) -> list:
+    """Non-overlapping tiles covering [0, duration). Last tile is clamped short."""
+    tiles = []
+    t = 0.0
+    idx = 0
+    while t < duration - 1e-6:
+        t_end = min(round(t + tile_size, 3), round(duration, 3))
+        tiles.append({"tile_index": idx, "t_start": round(t, 3), "t_end": t_end})
+        idx += 1
+        t = round(t + tile_size, 3)
+    return tiles
+
+
+def tile_context_window(tile_start: float, tile_end: float, window_size: int, duration: float):
+    """16s/32s clip centered on the tile, clamped (not shifted) at [0, duration] —
+    a boundary tile's context window can end up shorter than the nominal size."""
+    center = (tile_start + tile_end) / 2.0
+    half = window_size / 2.0
+    start = max(0.0, center - half)
+    end = min(duration, center + half)
+    return round(start, 3), round(end, 3)
+
+
+def _extract_tile_clips(match_file_path: str, run_dir: Path, tile: dict, duration: float) -> dict:
+    """Extract the 3 aligned clips for one tile. Returns
+    {window_size: (clip_path, t_start, t_end)}."""
+    paths = {}
+    idx = tile["tile_index"]
+
+    t_start, t_end = tile["t_start"], tile["t_end"]
+    p8 = run_dir / f"tile_{idx:05d}_8s.mp4"
+    extract_clip(match_file_path, str(p8), t_start, t_end - t_start)
+    paths[8] = (p8, t_start, t_end)
+
+    for ws in (16, 32):
+        cstart, cend = tile_context_window(t_start, t_end, ws, duration)
+        p = run_dir / f"tile_{idx:05d}_{ws}s.mp4"
+        extract_clip(match_file_path, str(p), cstart, cend - cstart)
+        paths[ws] = (p, cstart, cend)
+
+    return paths
+
+
+# ---------------------------------------------------------------------------
+# Model loading — each called once per PredictionRun, not per clip
+# ---------------------------------------------------------------------------
+
+def _load_checkpoint_model(model_cls_factory, ckpt_path: Path, device, wrapped: bool):
+    if not ckpt_path.exists():
+        raise RuntimeError(f"No trained checkpoint found at {ckpt_path} — train this model first.")
+    model = model_cls_factory()
+    state = torch.load(str(ckpt_path), map_location=device, weights_only=True)
+    model.load_state_dict(state["model_state_dict"] if wrapped else state)
+    return model.to(device).eval()
+
+
+def load_r3d(device):
+    return _load_checkpoint_model(
+        lambda: model_defs.R3DHighlightModel(len(HIGHLIGHT_CLASSES)),
+        R3D_MODEL_DIR / "best_model.pt", device, wrapped=True,
+    )
+
+
+def load_videomae(device):
+    return _load_checkpoint_model(
+        lambda: model_defs.VideoMAEHighlightModel(len(HIGHLIGHT_CLASSES)),
+        VIDEOMAE_MODEL_DIR / "best_model.pt", device, wrapped=True,
+    )
+
+
+def load_slowfast(device):
+    return _load_checkpoint_model(
+        lambda: model_defs.SlowFastHighlightModel(len(HIGHLIGHT_CLASSES)),
+        SLOWFAST_MODEL_DIR / "best_model.pt", device, wrapped=True,
+    )
+
+
+def load_mlp(device):
+    return _load_checkpoint_model(
+        lambda: model_defs.InterpMLP(25, len(HIGHLIGHT_CLASSES)),
+        MLP_MODEL_DIR / "best_model.pt", device, wrapped=False,
+    )
+
+
+def load_rf():
+    import joblib
+    ckpt_path = RF_MODEL_DIR / "best_model.pkl"
+    if not ckpt_path.exists():
+        raise RuntimeError(f"No trained checkpoint found at {ckpt_path} — train RF first.")
+    return joblib.load(str(ckpt_path))
+
+
+def load_hybrid(db, device):
+    import training_history
+    from config import BASE_DIR
+    from trainer_hybrid import load_backbone
+
+    latest = training_history.latest_completed_per_model(db)
+    hybrid_run = latest.get("hybrid")
+    if hybrid_run is None or not hybrid_run.backbone:
+        raise RuntimeError("No completed Hybrid training run found — train Hybrid first.")
+    backbone_name = hybrid_run.backbone
+
+    backbone_model, transform_fn, feat_dim = load_backbone(backbone_name, BASE_DIR, device)
+
+    ckpt_path = HYBRID_MODEL_DIR / "best_model.pt"
+    if not ckpt_path.exists():
+        raise RuntimeError(f"No trained checkpoint found at {ckpt_path} — train Hybrid first.")
+    fusion = model_defs.HybridFusion(25, feat_dim, len(HIGHLIGHT_CLASSES))
+    state = torch.load(str(ckpt_path), map_location=device, weights_only=True)
+    fusion.load_state_dict(state)
+    fusion = fusion.to(device).eval()
+
+    return {"backbone": backbone_model, "transform_fn": transform_fn,
+            "fusion": fusion, "backbone_name": backbone_name}
+
+
+def _load_feature_extractors():
+    """YOLO + MediaPipe Pose, loaded once and reused per clip — same
+    principle as feature_extractor.py's own one-time load in main()."""
+    from ultralytics import YOLO
+    import mediapipe as mp
+
+    yolo_model = YOLO("yolov8n.pt")
+    pose = None
+    try:
+        pose = mp.solutions.pose.Pose(
+            static_image_mode=False, model_complexity=0, min_detection_confidence=0.3,
+        )
+    except AttributeError:
+        pose = None  # mediapipe>=0.10.14 removed the solutions API; pose features become 0
+    return yolo_model, pose
+
+
+def load_model_bundle(model_type: str, db, device) -> dict:
+    if model_type == "r3d":
+        return {"kind": "r3d", "model": load_r3d(device)}
+    if model_type == "videomae":
+        return {"kind": "videomae", "model": load_videomae(device)}
+    if model_type == "slowfast":
+        return {"kind": "slowfast", "model": load_slowfast(device)}
+    if model_type == "rf":
+        yolo_model, pose_model = _load_feature_extractors()
+        return {"kind": "rf", "yolo": yolo_model, "pose": pose_model, "rf": load_rf()}
+    if model_type == "mlp":
+        yolo_model, pose_model = _load_feature_extractors()
+        return {"kind": "mlp", "yolo": yolo_model, "pose": pose_model, "mlp": load_mlp(device)}
+    if model_type == "hybrid":
+        yolo_model, pose_model = _load_feature_extractors()
+        bundle = {"kind": "hybrid", "yolo": yolo_model, "pose": pose_model}
+        bundle.update(load_hybrid(db, device))
+        return bundle
+    raise ValueError(f"Unknown model_type: {model_type}")
+
+
+# ---------------------------------------------------------------------------
+# Per-window forward pass
+# ---------------------------------------------------------------------------
+
+def predict_window(model_type: str, bundle: dict, clip_path: str, window_size_s: int, device):
+    """Returns (probs: np.ndarray[10], score: float) for one clip. Trainers
+    only ever store argmax — softmax is computed explicitly here."""
+    kind = bundle["kind"]
+
+    if kind == "r3d":
+        x = model_defs.preprocess_r3d_clip(clip_path, window_size_s).to(device)
+        with torch.no_grad():
+            logits, score = bundle["model"](x)
+        return F.softmax(logits, dim=1)[0].cpu().numpy(), float(score.item())
+
+    if kind == "videomae":
+        x = model_defs.preprocess_videomae_clip(clip_path).to(device)
+        with torch.no_grad():
+            logits, score = bundle["model"](x)
+        return F.softmax(logits, dim=1)[0].cpu().numpy(), float(score.item())
+
+    if kind == "slowfast":
+        slow, fast = model_defs.preprocess_slowfast_clip(clip_path)
+        slow, fast = slow.to(device), fast.to(device)
+        with torch.no_grad():
+            logits, score = bundle["model"](slow, fast)
+        return F.softmax(logits, dim=1)[0].cpu().numpy(), float(score.item())
+
+    if kind in ("rf", "mlp", "hybrid"):
+        import feature_extractor
+        feat = feature_extractor.extract_features(clip_path, bundle["yolo"], bundle["pose"])  # (25,)
+
+        if kind == "rf":
+            clf = bundle["rf"]["classifier"]
+            reg = bundle["rf"]["regressor"]
+            raw_probs = clf.predict_proba(feat.reshape(1, -1))[0]  # ordered by clf.classes_
+            probs = np.zeros(len(HIGHLIGHT_CLASSES), dtype=np.float32)
+            for i, cls_int in enumerate(clf.classes_):
+                probs[cls_int] = raw_probs[i]
+            score = float(np.clip(reg.predict(feat.reshape(1, -1))[0], 0.0, 1.0))
+            return probs, score
+
+        if kind == "mlp":
+            x = torch.from_numpy(feat).unsqueeze(0).to(device)
+            with torch.no_grad():
+                logits, score = bundle["mlp"](x)
+            return F.softmax(logits, dim=1)[0].cpu().numpy(), float(score.item())
+
+        # hybrid — deep embedding from the frozen backbone + the 25-dim features
+        video = model_defs.read_video_compat(clip_path)
+        inp = bundle["transform_fn"](video)
+        with torch.no_grad():
+            inp = [t.to(device) for t in inp] if isinstance(inp, list) else inp.to(device)
+            deep_feat = bundle["backbone"](inp)  # already batched (1, feat_dim)
+            interp = torch.from_numpy(feat).unsqueeze(0).to(device)
+            logits, score = bundle["fusion"](interp, deep_feat)
+        return F.softmax(logits, dim=1)[0].cpu().numpy(), float(score.item())
+
+    raise ValueError(f"Unknown model kind: {kind}")
+
+
+# ---------------------------------------------------------------------------
+# Merges
+# ---------------------------------------------------------------------------
+
+def merge_score(scores: dict, weights: dict = SCORE_MERGE_WEIGHTS) -> float:
+    """Weighted average across whichever windows produced a score, renormalized."""
+    avail = {ws: s for ws, s in scores.items() if s is not None}
+    if not avail:
+        return 0.0
+    total_w = sum(weights.get(ws, 0.0) for ws in avail)
+    if total_w <= 0:
+        return float(np.mean(list(avail.values())))
+    return float(sum(weights.get(ws, 0.0) * s for ws, s in avail.items()) / total_w)
+
+
+def merge_class(class_probs: dict, support_sets: dict, weights: dict = CLASS_VOTE_WEIGHTS,
+                 classes: list = HIGHLIGHT_CLASSES):
+    """Masked weighted vote: each window's softmax is zeroed outside its own
+    class support set and renormalized before being combined, so a window
+    can never vote for a class it has no training signal for. A window
+    whose masked mass is ~0 is dropped and the remaining weights renormalized.
+    If every window gets dropped, falls back to a straight unmasked average
+    so the tile still gets a label."""
+    n = len(classes)
+    combined = np.zeros(n, dtype=np.float64)
+    total_w = 0.0
+
+    for ws, probs in class_probs.items():
+        support = support_sets.get(ws, set())
+        mask = np.array([1.0 if c in support else 0.0 for c in classes])
+        masked = np.asarray(probs, dtype=np.float64) * mask
+        mass = masked.sum()
+        if mass <= 1e-9:
+            continue
+        w = weights.get(ws, 0.0)
+        combined += w * (masked / mass)
+        total_w += w
+
+    if total_w <= 0:
+        combined = np.mean([np.asarray(p, dtype=np.float64) for p in class_probs.values()], axis=0)
+    else:
+        combined = combined / total_w
+
+    best_idx = int(np.argmax(combined))
+    return classes[best_idx], combined.tolist()
+
+
+# ---------------------------------------------------------------------------
+# Log / progress helpers (mirrors clip_extractor.py's conventions)
+# ---------------------------------------------------------------------------
+
+def _run_dir(run_id: int) -> Path:
+    return PREDICTIONS_DIR / str(run_id)
+
+
+def _log_path(run_id: int) -> Path:
+    return _run_dir(run_id) / "inference.log"
+
+
+def _progress_path(run_id: int) -> Path:
+    return _run_dir(run_id) / "progress.json"
+
+
+def _make_logger(run_id: int):
+    path = _log_path(run_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(path, "w", encoding="utf-8", buffering=1)
+
+    def log(msg: str):
+        line = f"[{datetime.now().strftime('%H:%M:%S')}] {msg}"
+        print(line)
+        fh.write(line + "\n")
+
+    return log, fh
+
+
+def _write_progress(run_id: int, tiles_total: int, tiles_done: int, status: str):
+    _progress_path(run_id).write_text(
+        json.dumps({"tiles_total": tiles_total, "tiles_done": tiles_done, "status": status}),
+        encoding="utf-8",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Orchestration (BackgroundTask entrypoint, mirrors clip_extractor.run_extraction)
+# ---------------------------------------------------------------------------
+
+def run_inference(run_id: int):
+    from database import SessionLocal
+
+    log, fh = _make_logger(run_id)
+    db = SessionLocal()
+    try:
+        _do_run_inference(run_id, db, log)
+    except Exception as exc:
+        log(f"FATAL: {exc}")
+        _mark_error(run_id, db, str(exc))
+    finally:
+        fh.close()
+        db.close()
+
+
+def _do_run_inference(run_id: int, db, log):
+    run = db.query(models.PredictionRun).filter(models.PredictionRun.id == run_id).first()
+    if not run:
+        log(f"ERROR: PredictionRun {run_id} not found.")
+        return
+    match = db.query(models.Match).filter(models.Match.id == run.match_id).first()
+    if not match:
+        log("ERROR: Match not found.")
+        run.status, run.error_message = "error", "Match not found"
+        db.commit()
+        return
+
+    log(f"Starting prediction run {run_id}: model={run.model_type} match={match.name}")
+    device = torch.device("cuda" if run.device == "cuda" and torch.cuda.is_available() else "cpu")
+
+    info = get_video_info(match.file_path)
+    duration = info["duration"]
+    log(f"Duration: {duration:.2f}s")
+
+    support_sets = class_support_sets(db)
+    run.class_support_json = json.dumps({str(ws): sorted(c) for ws, c in support_sets.items()})
+    db.commit()
+    log(f"Class support sets: {({ws: sorted(c) for ws, c in support_sets.items()})}")
+
+    try:
+        bundle = load_model_bundle(run.model_type, db, device)
+    except Exception as exc:
+        log(f"ERROR loading model: {exc}")
+        run.status, run.error_message = "error", str(exc)[:500]
+        db.commit()
+        return
+
+    if bundle.get("backbone_name"):
+        run.backbone = bundle["backbone_name"]
+        db.commit()
+
+    tiles = build_tiles(duration)
+    total = len(tiles)
+    log(f"Planned {total} tiles of {TILE_SIZE}s")
+
+    run_dir = _run_dir(run_id)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    _write_progress(run_id, total, 0, "running")
+
+    done = 0
+    for tile in tiles:
+        try:
+            clip_info = _extract_tile_clips(match.file_path, run_dir, tile, duration)
+
+            window_probs, window_scores = {}, {}
+            for ws, (path, _cstart, _cend) in clip_info.items():
+                probs, score = predict_window(run.model_type, bundle, str(path), ws, device)
+                window_probs[ws] = probs
+                window_scores[ws] = score
+
+            merged_score = merge_score(window_scores)
+            merged_class, _combined = merge_class(window_probs, support_sets)
+
+            seg = models.PredictionSegment(
+                run_id=run_id, tile_index=tile["tile_index"],
+                global_start_time=tile["t_start"], global_end_time=tile["t_end"],
+                predicted_event=merged_class, highlight_score=round(merged_score, 4),
+                clip_path=str(clip_info[8][0]),
+            )
+            db.add(seg)
+            db.flush()
+
+            for ws, probs in window_probs.items():
+                top_idx = int(np.argmax(probs))
+                db.add(models.PredictionWindowResult(
+                    segment_id=seg.id, window_size=ws,
+                    event_class=HIGHLIGHT_CLASSES[top_idx], confidence=float(probs[top_idx]),
+                    highlight_score=round(float(window_scores[ws]), 4),
+                    class_probs_json=json.dumps([float(p) for p in probs]),
+                ))
+            db.commit()
+
+            for ws in (16, 32):
+                try:
+                    os.remove(clip_info[ws][0])
+                except OSError:
+                    pass
+
+        except Exception as exc:
+            log(f"WARN tile {tile['tile_index']}: {exc}")
+            db.rollback()
+
+        done += 1
+        if done % 10 == 0 or done == total:
+            log(f"Progress: {done}/{total} tiles ({int(done / total * 100) if total else 100}%)")
+            _write_progress(run_id, total, done, "running")
+
+    run.status = "completed"
+    run.completed_at = datetime.utcnow()
+    db.commit()
+    _write_progress(run_id, total, done, "completed")
+    log("Prediction run complete.")
+
+
+def _mark_error(run_id: int, db, message: str):
+    try:
+        run = db.query(models.PredictionRun).filter(models.PredictionRun.id == run_id).first()
+        if run:
+            run.status = "error"
+            run.error_message = message[:500]
+            run.completed_at = datetime.utcnow()
+            db.commit()
+        _write_progress(run_id, 0, 0, "error")
+    except Exception:
+        pass

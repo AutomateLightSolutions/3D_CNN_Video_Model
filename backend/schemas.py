@@ -95,3 +95,47 @@ class TrainingRunOut(BaseModel):
     metrics: dict = {}
     started_at: datetime
     completed_at: Optional[datetime] = None
+
+
+class PredictionConfig(BaseModel):
+    match_id: int
+    model_type: str
+    device: str = "cuda"
+
+
+class PredictionWindowResultOut(BaseModel):
+    window_size: int
+    event_class: str
+    confidence: float
+    highlight_score: float
+    class_probs: list = []
+
+
+class PredictionSegmentOut(BaseModel):
+    id: int
+    tile_index: int
+    global_start_time: float
+    global_end_time: float
+    predicted_event: str
+    highlight_score: float
+    clip_url: Optional[str] = None
+    windows: list = []
+
+
+class PredictionRunOut(BaseModel):
+    id: int
+    match_id: int
+    model_type: str
+    backbone: Optional[str] = None
+    device: Optional[str] = None
+    status: str
+    class_support: dict = {}
+    error_message: Optional[str] = None
+    started_at: datetime
+    completed_at: Optional[datetime] = None
+
+
+class PredictionProgress(BaseModel):
+    tiles_total: int
+    tiles_done: int
+    status: str

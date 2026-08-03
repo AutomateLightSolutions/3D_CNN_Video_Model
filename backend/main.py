@@ -2,6 +2,7 @@ import csv
 import json
 import logging
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -16,7 +17,9 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
+import inference
 import models
+import prediction_history
 import schemas
 import training_history
 from clip_extractor import run_extraction
@@ -29,8 +32,9 @@ from config import (
     RF_MODEL_DIR, RF_LOG_PATH, RF_PID_FILE, RF_METRICS_PATH,
     MLP_MODEL_DIR, MLP_LOG_PATH, MLP_PID_FILE, MLP_METRICS_PATH,
     HYBRID_MODEL_DIR, HYBRID_LOG_PATH, HYBRID_PID_FILE, HYBRID_METRICS_PATH,
-    FEATURES_DIR, FEATURES_PROGRESS,
+    FEATURES_DIR, FEATURES_PROGRESS, PREDICTIONS_DIR,
     HIGHLIGHT_CLASSES, WINDOW_SIZES, WINDOW_CONFIG,
+    PREDICTION_MODEL_TYPES,
     DB_PATH,
 )
 from database import Base, engine, get_db, SessionLocal
@@ -39,6 +43,7 @@ logger = logging.getLogger(__name__)
 
 _MATCH_NOT_FOUND = "Match not found"
 _CLIP_NOT_FOUND  = "Clip not found"
+_PREDICTION_RUN_NOT_FOUND = "Prediction run not found"
 
 Base.metadata.create_all(bind=engine)
 
@@ -48,6 +53,7 @@ Base.metadata.create_all(bind=engine)
 _startup_db = SessionLocal()
 try:
     training_history.sweep_stale_running(_startup_db)
+    prediction_history.sweep_stale_running(_startup_db)
 finally:
     _startup_db.close()
 
@@ -55,7 +61,7 @@ for _d in [
     CLIPS_DIR, EXPORT_DIR,
     R3D_MODEL_DIR, VIDEOMAE_MODEL_DIR, SLOWFAST_MODEL_DIR,
     RF_MODEL_DIR, MLP_MODEL_DIR, HYBRID_MODEL_DIR,
-    FEATURES_DIR,
+    FEATURES_DIR, PREDICTIONS_DIR,
 ]:
     _d.mkdir(parents=True, exist_ok=True)
 
@@ -132,6 +138,39 @@ def _match_out(match: models.Match, db: Session) -> schemas.MatchOut:
         created_at=match.created_at,
         clip_count=clip_count,
         labeled_count=labeled_count,
+    )
+
+
+def _prediction_window_out(w: models.PredictionWindowResult) -> schemas.PredictionWindowResultOut:
+    try:
+        probs = json.loads(w.class_probs_json)
+    except json.JSONDecodeError:
+        probs = []
+    return schemas.PredictionWindowResultOut(
+        window_size=w.window_size, event_class=w.event_class, confidence=w.confidence,
+        highlight_score=w.highlight_score, class_probs=probs,
+    )
+
+
+def _prediction_segment_out(seg: models.PredictionSegment) -> schemas.PredictionSegmentOut:
+    return schemas.PredictionSegmentOut(
+        id=seg.id, tile_index=seg.tile_index,
+        global_start_time=seg.global_start_time, global_end_time=seg.global_end_time,
+        predicted_event=seg.predicted_event, highlight_score=seg.highlight_score,
+        clip_url=_clip_url(seg.clip_path) if seg.clip_path else None,
+        windows=[_prediction_window_out(w) for w in seg.windows],
+    )
+
+
+def _prediction_run_out(run: models.PredictionRun) -> schemas.PredictionRunOut:
+    try:
+        support = json.loads(run.class_support_json) if run.class_support_json else {}
+    except json.JSONDecodeError:
+        support = {}
+    return schemas.PredictionRunOut(
+        id=run.id, match_id=run.match_id, model_type=run.model_type, backbone=run.backbone,
+        device=run.device, status=run.status, class_support=support,
+        error_message=run.error_message, started_at=run.started_at, completed_at=run.completed_at,
     )
 
 
@@ -321,8 +360,13 @@ def delete_match(match_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail=_MATCH_NOT_FOUND)
     if match.status == "extracting":
         raise HTTPException(status_code=409, detail="Cannot delete while extraction is running")
+    if any(r.status == "running" for r in match.prediction_runs):
+        raise HTTPException(status_code=409, detail="Cannot delete while a prediction run is in progress")
+    run_ids = [r.id for r in match.prediction_runs]
     db.delete(match)
     db.commit()
+    for run_id in run_ids:
+        shutil.rmtree(PREDICTIONS_DIR / str(run_id), ignore_errors=True)
     return {"message": "Match deleted"}
 
 
@@ -755,6 +799,95 @@ def delete_training_run(run_id: int, db: Session = Depends(get_db)):
 def training_leaderboard(db: Session = Depends(get_db)):
     latest = training_history.latest_completed_per_model(db)
     return [_run_out(r) for r in latest.values()]
+
+
+# ---------------------------------------------------------------------------
+# Predictions — full-match multi-window inference
+# ---------------------------------------------------------------------------
+
+@app.get("/predictions/available-models")
+def predictions_available_models(db: Session = Depends(get_db)):
+    result = inference.available_models()
+    hybrid_run = training_history.latest_completed_per_model(db).get("hybrid")
+    return {
+        "available": result,
+        "hybrid_backbone": hybrid_run.backbone if hybrid_run else None,
+    }
+
+
+@app.post("/predictions/start", response_model=schemas.PredictionRunOut)
+def start_prediction(cfg: schemas.PredictionConfig, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    match = db.query(models.Match).filter(models.Match.id == cfg.match_id).first()
+    if not match:
+        raise HTTPException(status_code=404, detail=_MATCH_NOT_FOUND)
+    if cfg.model_type not in PREDICTION_MODEL_TYPES:
+        raise HTTPException(status_code=400, detail=f"Unknown model_type: {cfg.model_type}")
+    if not inference.available_models().get(cfg.model_type):
+        raise HTTPException(status_code=400, detail=f"No trained checkpoint found for {cfg.model_type}")
+    if prediction_history.latest_running_any(db) is not None:
+        raise HTTPException(status_code=409, detail="Another prediction run is already in progress")
+
+    run = prediction_history.start_run(db, cfg.match_id, cfg.model_type, cfg.device)
+    background_tasks.add_task(inference.run_inference, run.id)
+    return _prediction_run_out(run)
+
+
+@app.get("/predictions", response_model=List[schemas.PredictionRunOut])
+def list_predictions(match_id: Optional[int] = None, db: Session = Depends(get_db)):
+    return [_prediction_run_out(r) for r in prediction_history.list_runs(db, match_id)]
+
+
+@app.get("/predictions/{run_id}", response_model=schemas.PredictionRunOut)
+def get_prediction_run(run_id: int, db: Session = Depends(get_db)):
+    run = db.query(models.PredictionRun).filter(models.PredictionRun.id == run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail=_PREDICTION_RUN_NOT_FOUND)
+    return _prediction_run_out(run)
+
+
+@app.get("/predictions/{run_id}/progress", response_model=schemas.PredictionProgress)
+def prediction_progress(run_id: int, db: Session = Depends(get_db)):
+    run = db.query(models.PredictionRun).filter(models.PredictionRun.id == run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail=_PREDICTION_RUN_NOT_FOUND)
+    path = PREDICTIONS_DIR / str(run_id) / "progress.json"
+    if not path.exists():
+        return schemas.PredictionProgress(tiles_total=0, tiles_done=0, status=run.status)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        data = {"tiles_total": 0, "tiles_done": 0, "status": run.status}
+    return schemas.PredictionProgress(**data)
+
+
+@app.get("/predictions/{run_id}/log")
+def prediction_log(run_id: int, db: Session = Depends(get_db)):
+    if not db.query(models.PredictionRun).filter(models.PredictionRun.id == run_id).first():
+        raise HTTPException(status_code=404, detail=_PREDICTION_RUN_NOT_FOUND)
+    path = PREDICTIONS_DIR / str(run_id) / "inference.log"
+    if not path.exists():
+        return {"lines": []}
+    return {"lines": path.read_text(encoding="utf-8", errors="replace").splitlines()[-100:]}
+
+
+@app.get("/predictions/{run_id}/segments", response_model=List[schemas.PredictionSegmentOut])
+def prediction_segments(run_id: int, db: Session = Depends(get_db)):
+    if not db.query(models.PredictionRun).filter(models.PredictionRun.id == run_id).first():
+        raise HTTPException(status_code=404, detail=_PREDICTION_RUN_NOT_FOUND)
+    segs = (
+        db.query(models.PredictionSegment)
+        .filter(models.PredictionSegment.run_id == run_id)
+        .order_by(models.PredictionSegment.tile_index)
+        .all()
+    )
+    return [_prediction_segment_out(s) for s in segs]
+
+
+@app.delete("/predictions/{run_id}")
+def delete_prediction_run(run_id: int, db: Session = Depends(get_db)):
+    if not prediction_history.delete_run(db, run_id):
+        raise HTTPException(status_code=404, detail=_PREDICTION_RUN_NOT_FOUND)
+    return {"message": "Prediction run deleted"}
 
 
 # ---------------------------------------------------------------------------

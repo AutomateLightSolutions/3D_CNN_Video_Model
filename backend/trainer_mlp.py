@@ -28,10 +28,6 @@ def _handle_signal(sig, frame):
     _stop = True
 
 
-signal.signal(signal.SIGTERM, _handle_signal)
-signal.signal(signal.SIGINT, _handle_signal)
-
-
 def log(msg: str):
     print(msg, flush=True)
 
@@ -39,6 +35,13 @@ def log(msg: str):
 def main():
     global _stop
     args = parse_args()
+
+    # Registered here, not at module level — this module could be imported
+    # from a non-main thread (e.g. a FastAPI BackgroundTask), where
+    # signal.signal() raises ValueError. Only the standalone subprocess path
+    # (`python trainer_mlp.py`) needs this.
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
 
     BASE_DIR = Path(args.data_dir).parent
     features_dir = BASE_DIR / "features"
@@ -63,6 +66,7 @@ def main():
     from sqlalchemy.orm import sessionmaker
     from config import HIGHLIGHT_CLASSES
     from training_common import load_labeled_split, class_int_for, visual_score_for, compute_full_metrics
+    from model_defs import InterpMLP
 
     Session = sessionmaker(bind=engine)
     db = Session()
@@ -118,20 +122,6 @@ def main():
     val_loader   = DataLoader(val_ds,   batch_size=args.batch_size, shuffle=False, num_workers=0)
 
     # ── model ──────────────────────────────────────────────────────
-    class InterpMLP(nn.Module):
-        def __init__(self, in_dim, n_classes):
-            super().__init__()
-            self.backbone = nn.Sequential(
-                nn.Linear(in_dim, 128), nn.ReLU(), nn.Dropout(0.3),
-                nn.Linear(128, 64), nn.ReLU(),
-            )
-            self.class_head = nn.Linear(64, n_classes)
-            self.score_head = nn.Sequential(nn.Linear(64, 1), nn.Sigmoid())
-
-        def forward(self, x):
-            feat = self.backbone(x)
-            return self.class_head(feat), self.score_head(feat).squeeze(1)
-
     model = InterpMLP(in_dim, n_classes).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
     cls_criterion = nn.CrossEntropyLoss()

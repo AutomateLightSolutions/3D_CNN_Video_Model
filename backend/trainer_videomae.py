@@ -132,16 +132,18 @@ def main():
     from sqlalchemy.orm import sessionmaker
 
     try:
-        from transformers import VideoMAEModel, VideoMAEConfig
+        import transformers  # noqa: F401 — fail fast with a clear message if missing
     except ImportError:
         print("ERROR: 'transformers' package not installed. Run: pip install transformers", flush=True)
         sys.exit(1)
 
     from config import DB_PATH, VIDEOMAE_MODEL_DIR, HIGHLIGHT_CLASSES, WINDOW_CONFIG, VIDEOMAE_METRICS_PATH, FEATURES_DIR
     from training_common import load_labeled_split, class_int_for, visual_score_for
-
-    N_FRAMES = 16
-    IMG_SIZE = 224
+    from model_defs import (
+        VideoMAEHighlightModel,
+        VIDEOMAE_N_FRAMES as N_FRAMES,
+        VIDEOMAE_IMG_SIZE as IMG_SIZE,
+    )
 
     output_dir   = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -195,27 +197,6 @@ def main():
     class_weights     = compute_class_weights(train_class_names, HIGHLIGHT_CLASSES).to(device)
 
     num_classes = len(HIGHLIGHT_CLASSES)
-
-    class VideoMAEHighlightModel(nn.Module):
-        def __init__(self, num_classes):
-            super().__init__()
-            model_name = "MCG-NJU/videomae-base"
-            try:
-                self.backbone = VideoMAEModel.from_pretrained(model_name)
-                print(f"Loaded pretrained {model_name} weights.", flush=True)
-            except Exception as e:
-                print(f"WARNING: could not load pretrained weights ({e}). Training from random init.", flush=True)
-                cfg = VideoMAEConfig()
-                self.backbone = VideoMAEModel(cfg)
-            hidden_size = self.backbone.config.hidden_size  # 768 for base; auto-detected
-            self.class_head = nn.Linear(hidden_size, num_classes)
-            self.score_head = nn.Sequential(nn.Linear(hidden_size, 1), nn.Sigmoid())
-
-        def forward(self, pixel_values):
-            # pixel_values: (B, T, C, H, W) — VideoMAE expects this format
-            out  = self.backbone(pixel_values=pixel_values)
-            feat = out.last_hidden_state.mean(dim=1)  # (B, hidden) — temporal mean pooling
-            return self.class_head(feat), self.score_head(feat).squeeze(1)
 
     model    = VideoMAEHighlightModel(num_classes).to(device)
     ce_loss  = nn.CrossEntropyLoss(weight=class_weights)

@@ -37,10 +37,6 @@ def _handle_signal(sig, frame):
     _stop = True
 
 
-signal.signal(signal.SIGTERM, _handle_signal)
-signal.signal(signal.SIGINT, _handle_signal)
-
-
 def log(msg: str):
     print(msg, flush=True)
 
@@ -204,6 +200,14 @@ def main():
     global _stop
     args = parse_args()
 
+    # Registered here (not at module level) because this module is also
+    # imported by inference.py's load_hybrid() to reuse load_backbone() —
+    # that import happens inside a FastAPI BackgroundTask worker thread, and
+    # signal.signal() raises ValueError outside the main thread. Only the
+    # standalone `python trainer_hybrid.py` subprocess path needs this.
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
+
     BASE_DIR = Path(args.data_dir).parent
     features_dir = BASE_DIR / "features"
     output_dir = Path(args.output_dir)
@@ -229,6 +233,7 @@ def main():
     from sqlalchemy.orm import sessionmaker
     from config import HIGHLIGHT_CLASSES
     from training_common import load_labeled_split, class_int_for, visual_score_for, compute_full_metrics
+    from model_defs import HybridFusion
 
     Session = sessionmaker(bind=engine)
     db = Session()
@@ -324,27 +329,6 @@ def main():
     val_loader   = DataLoader(val_ds,   batch_size=args.batch_size, shuffle=False, num_workers=0)
 
     # ── fusion model ───────────────────────────────────────────────
-    class HybridFusion(nn.Module):
-        def __init__(self, interp_dim, deep_dim, n_classes):
-            super().__init__()
-            self.interp_proj = nn.Sequential(
-                nn.Linear(interp_dim, 128), nn.ReLU(),
-            )
-            self.deep_proj = nn.Sequential(
-                nn.Linear(deep_dim, 128), nn.ReLU(),
-            )
-            self.fusion = nn.Sequential(
-                nn.Linear(256, 128), nn.ReLU(), nn.Dropout(0.3),
-            )
-            self.class_head = nn.Linear(128, n_classes)
-            self.score_head = nn.Sequential(nn.Linear(128, 1), nn.Sigmoid())
-
-        def forward(self, interp, deep):
-            i_feat = self.interp_proj(interp)
-            d_feat = self.deep_proj(deep)
-            fused  = self.fusion(torch.cat([i_feat, d_feat], dim=1))
-            return self.class_head(fused), self.score_head(fused).squeeze(1)
-
     model = HybridFusion(in_dim, feat_dim, n_classes).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
     cls_criterion = nn.CrossEntropyLoss()
