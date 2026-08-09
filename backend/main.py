@@ -199,6 +199,15 @@ def _start_trainer(
             # instead of a plain OSError — must be caught the same way.
             pid_file.unlink(missing_ok=True)
 
+    # Clear any leftover metrics.json from a previous run before launching.
+    # Without this, a status poll landing in the gap between process launch
+    # and the subprocess's own first write_metrics() call reads the *old*
+    # file — which may still say status:"done" from the last run — and
+    # prematurely finalizes this run's fresh "running" history row with
+    # stale metrics. When the real training finishes later, there's no
+    # "running" row left to finalize, so the true result never gets saved.
+    (output_dir / "metrics.json").unlink(missing_ok=True)
+
     script = Path(__file__).parent / script_name
     cmd = [
         sys.executable, str(script),

@@ -10,12 +10,10 @@ const METRIC_COLS = [
   { key: 'val_accuracy', label: 'Val Accuracy', format: fmtP,             higherBetter: true },
   { key: 'precision',    label: 'Precision',    format: v => fmt(v, 3),  higherBetter: true },
   { key: 'recall',       label: 'Recall',       format: v => fmt(v, 3),  higherBetter: true },
-  { key: 'macro_f1',     label: 'Macro F1',     format: v => fmt(v, 3),  higherBetter: true },
-  { key: 'weighted_f1',  label: 'Weighted F1',  format: v => fmt(v, 3),  higherBetter: true },
+  { key: 'weighted_f1',  label: 'F1 Score',     format: v => fmt(v, 3),  higherBetter: true },
   { key: 'mae',          label: 'MAE',          format: v => fmt(v, 4),  higherBetter: false },
   { key: 'mse',          label: 'MSE',          format: v => fmt(v, 4),  higherBetter: false },
   { key: 'r2',           label: 'R²',           format: v => fmt(v, 4),  higherBetter: true },
-  { key: 'pearson',      label: 'Pearson',      format: v => fmt(v, 4),  higherBetter: true },
 ]
 
 function bestValuePerColumn(rows) {

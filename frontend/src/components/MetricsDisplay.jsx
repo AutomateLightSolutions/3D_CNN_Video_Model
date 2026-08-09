@@ -100,8 +100,7 @@ export function BestMetricsPanel({ best, bestEpoch, bestValLoss, completedAt, ti
         <MetricCard label="Val Accuracy" value={fmtP(best.val_accuracy)} color="var(--green)" />
         <MetricCard label="Precision"    value={fmt(best.precision, 3)} />
         <MetricCard label="Recall"       value={fmt(best.recall, 3)} />
-        <MetricCard label="Macro F1"     value={fmt(best.macro_f1, 3)}    color="#a855f7" />
-        <MetricCard label="Weighted F1"  value={fmt(best.weighted_f1, 3)} />
+        <MetricCard label="F1 Score"     value={fmt(best.weighted_f1, 3)} />
       </div>
 
       <h3 style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: 0.5, margin: '20px 0 8px' }}>
@@ -111,7 +110,6 @@ export function BestMetricsPanel({ best, bestEpoch, bestValLoss, completedAt, ti
         <MetricCard label="MAE"     value={fmt(best.mae, 4)} />
         <MetricCard label="MSE"     value={fmt(best.mse, 4)} />
         <MetricCard label="R²"      value={fmt(best.r2, 4)} />
-        <MetricCard label="Pearson" value={fmt(best.pearson, 4)} />
       </div>
     </div>
   )

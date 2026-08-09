@@ -104,7 +104,7 @@ export default function History() {
                 <th>Started</th>
                 <th>Completed</th>
                 <th>Val Accuracy</th>
-                <th>Macro F1</th>
+                <th>F1 Score</th>
                 <th>MAE</th>
                 <th></th>
               </tr>
@@ -125,7 +125,7 @@ export default function History() {
                     <td style={{ fontSize: 12, color: 'var(--text-1)' }}>{formatDate(run.started_at)}</td>
                     <td style={{ fontSize: 12, color: 'var(--text-1)' }}>{formatDate(run.completed_at)}</td>
                     <td>{fmtP(best(run).val_accuracy)}</td>
-                    <td>{fmt(best(run).macro_f1, 3)}</td>
+                    <td>{fmt(best(run).weighted_f1, 3)}</td>
                     <td>{fmt(best(run).mae, 4)}</td>
                     <td onClick={e => e.stopPropagation()}>
                       <button className="btn btn-danger" style={{ padding: '4px 10px' }} onClick={() => handleDelete(run)}>
