@@ -139,3 +139,29 @@ class PredictionProgress(BaseModel):
     tiles_total: int
     tiles_done: int
     status: str
+
+
+# ---------------------------------------------------------------------------
+# Merge-weight calibration (admin)
+# ---------------------------------------------------------------------------
+
+class GroundTruthStatus(BaseModel):
+    uploaded: bool
+    n_tiles: int = 0
+
+
+class WeightEvalRequest(BaseModel):
+    class_vote_weights: dict    # {"8": float, "16": float, "32": float}
+    score_merge_weights: dict
+    label: Optional[str] = None
+
+
+class WeightEvalOut(BaseModel):
+    id: int
+    prediction_run_id: int
+    label: Optional[str] = None
+    class_vote_weights: dict
+    score_merge_weights: dict
+    n_tiles: int
+    metrics: dict
+    created_at: datetime

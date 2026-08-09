@@ -346,6 +346,157 @@ def merge_class(class_probs: dict, support_sets: dict, weights: dict = CLASS_VOT
 
 
 # ---------------------------------------------------------------------------
+# Merge-weight calibration (admin) — ground-truth CSV ingestion + fast re-merge
+# ---------------------------------------------------------------------------
+
+def ingest_ground_truth_csv(db, match_id: int, csv_text: str) -> int:
+    """Parse a Start/End/Text/Event/Score CSV (dense, overlapping caption-
+    level rows spanning a whole match) and aggregate it onto this match's
+    non-overlapping TILE_SIZE tile grid — the same grid build_tiles()
+    produces for any PredictionRun against this match, so it lines up with
+    PredictionSegment.tile_index regardless of which model/run is being
+    evaluated.
+
+    For each tile, every CSV row overlapping it contributes its Event/Score
+    weighted by the overlap duration; the tile's ground-truth event is the
+    overlap-weighted majority class, and its score the overlap-weighted mean.
+    A tile with no overlapping CSV row is left out entirely (no row written)
+    rather than guessed.
+
+    One CSV per match: this replaces any previously ingested ground truth
+    for match_id. Returns the number of tiles written.
+    """
+    import csv as csv_mod
+    import io
+
+    match = db.query(models.Match).filter(models.Match.id == match_id).first()
+    if not match:
+        raise ValueError(f"Match {match_id} not found")
+    if not match.duration_seconds:
+        raise ValueError(f"Match {match_id} has no known duration")
+
+    rows = []
+    reader = csv_mod.DictReader(io.StringIO(csv_text))
+    for r in reader:
+        try:
+            start, end = float(r["Start"]), float(r["End"])
+            event, score = r["Event"].strip(), float(r["Score"])
+        except (KeyError, ValueError):
+            continue
+        if end > start and event:
+            rows.append((start, end, event, score))
+    if not rows:
+        raise ValueError("No usable rows found in CSV (expected columns: Start,End,Event,Score)")
+
+    tiles = build_tiles(match.duration_seconds)
+
+    db.query(models.GroundTruthSegment).filter(models.GroundTruthSegment.match_id == match_id).delete()
+
+    n_written = 0
+    for tile in tiles:
+        t_start, t_end = tile["t_start"], tile["t_end"]
+        class_weight = {}
+        score_weight_sum = 0.0
+        score_sum = 0.0
+        for start, end, event, score in rows:
+            overlap = min(t_end, end) - max(t_start, start)
+            if overlap <= 0:
+                continue
+            class_weight[event] = class_weight.get(event, 0.0) + overlap
+            score_weight_sum += overlap
+            score_sum += overlap * score
+        if not class_weight:
+            continue
+        best_event = max(class_weight.items(), key=lambda kv: kv[1])[0]
+        mean_score = score_sum / score_weight_sum if score_weight_sum > 0 else 0.0
+        db.add(models.GroundTruthSegment(
+            match_id=match_id, tile_index=tile["tile_index"],
+            t_start=t_start, t_end=t_end,
+            event_class=best_event, score=round(mean_score, 4),
+        ))
+        n_written += 1
+
+    db.commit()
+    return n_written
+
+
+def ground_truth_status(db, match_id: int) -> dict:
+    n = (
+        db.query(models.GroundTruthSegment)
+        .filter(models.GroundTruthSegment.match_id == match_id)
+        .count()
+    )
+    return {"uploaded": n > 0, "n_tiles": n}
+
+
+def evaluate_merge_weights(db, run_id: int, class_vote_weights: dict, score_merge_weights: dict) -> dict:
+    """Re-merge a completed PredictionRun's *cached* per-window predictions
+    (PredictionWindowResult — no model re-inference) under a candidate weight
+    pair, and score the result against this match's GroundTruthSegment rows.
+    Weights only affect the merge step (merge_score/merge_class), never the
+    per-window model outputs, so this reproduces exactly what a full re-run
+    with those weights would have produced, at a fraction of the cost.
+
+    Returns {"n_tiles": int, "metrics": {...}} — metrics is the same schema
+    training_common.compute_full_metrics uses, on the merged class/score.
+    """
+    from training_common import class_int_for, compute_full_metrics
+    from config import HIGHLIGHT_CLASSES
+
+    run = db.query(models.PredictionRun).filter(models.PredictionRun.id == run_id).first()
+    if not run:
+        raise ValueError(f"PredictionRun {run_id} not found")
+
+    gt_rows = (
+        db.query(models.GroundTruthSegment)
+        .filter(models.GroundTruthSegment.match_id == run.match_id)
+        .all()
+    )
+    if not gt_rows:
+        raise ValueError("No ground truth uploaded for this match yet")
+    gt_by_tile = {g.tile_index: (g.event_class, g.score) for g in gt_rows}
+
+    support_sets = class_support_sets(db)
+    # Normalize weight-dict keys to int window sizes (JSON payloads arrive with string keys).
+    class_w = {int(k): float(v) for k, v in class_vote_weights.items()}
+    score_w = {int(k): float(v) for k, v in score_merge_weights.items()}
+
+    segments = (
+        db.query(models.PredictionSegment)
+        .filter(models.PredictionSegment.run_id == run_id)
+        .all()
+    )
+
+    all_labels, all_preds, all_scores_true, all_scores_pred = [], [], [], []
+    for seg in segments:
+        gt = gt_by_tile.get(seg.tile_index)
+        if gt is None:
+            continue
+        true_class, true_score = gt
+
+        window_probs, window_scores = {}, {}
+        for w in seg.windows:
+            window_probs[w.window_size] = np.asarray(json.loads(w.class_probs_json), dtype=np.float64)
+            window_scores[w.window_size] = w.highlight_score
+        if not window_probs:
+            continue
+
+        pred_class, _ = merge_class(window_probs, support_sets, weights=class_w, classes=HIGHLIGHT_CLASSES)
+        pred_score = merge_score(window_scores, weights=score_w)
+
+        all_labels.append(class_int_for(true_class))
+        all_preds.append(class_int_for(pred_class))
+        all_scores_true.append(true_score)
+        all_scores_pred.append(pred_score)
+
+    if not all_labels:
+        raise ValueError("No tiles overlap between this run's segments and the uploaded ground truth")
+
+    metrics = compute_full_metrics(all_labels, all_preds, all_scores_true, all_scores_pred, HIGHLIGHT_CLASSES)
+    return {"n_tiles": len(all_labels), "metrics": metrics}
+
+
+# ---------------------------------------------------------------------------
 # Log / progress helpers (mirrors clip_extractor.py's conventions)
 # ---------------------------------------------------------------------------
 

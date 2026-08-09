@@ -146,3 +146,13 @@ export const getPredictionProgress = (id) => req(`/predictions/${id}/progress`)
 export const getPredictionLog      = (id) => req(`/predictions/${id}/log`)
 export const getPredictionSegments = (id) => req(`/predictions/${id}/segments`)
 export const deletePredictionRun   = (id) => req(`/predictions/${id}`, { method: 'DELETE' })
+
+// --- Merge-weight calibration (admin) ---
+export const getGroundTruthStatus = (matchId) => req(`/matches/${matchId}/ground-truth`)
+export const uploadGroundTruth    = (matchId, file) => {
+  const body = new FormData()
+  body.append('file', file)
+  return req(`/matches/${matchId}/ground-truth`, { method: 'POST', body })
+}
+export const evaluateWeights   = (runId, payload) => req(`/predictions/${runId}/weight-evals`, json(payload))
+export const listWeightEvals   = (runId) => req(`/predictions/${runId}/weight-evals`)

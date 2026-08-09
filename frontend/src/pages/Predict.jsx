@@ -331,7 +331,15 @@ export default function Predict() {
                     <td><StatusBadge status={run.status} /></td>
                     <td style={{ fontSize: 12, color: 'var(--text-1)' }}>{formatDate(run.started_at)}</td>
                     <td style={{ fontSize: 12, color: 'var(--text-1)' }}>{formatDate(run.completed_at)}</td>
-                    <td onClick={e => e.stopPropagation()}>
+                    <td onClick={e => e.stopPropagation()} style={{ display: 'flex', gap: 8 }}>
+                      {run.status === 'completed' && (
+                        <a
+                          className="btn btn-secondary" style={{ padding: '4px 10px' }}
+                          href={`/predict/${run.id}/calibrate`} target="_blank" rel="noopener noreferrer"
+                        >
+                          Admin
+                        </a>
+                      )}
                       <button className="btn btn-danger" style={{ padding: '4px 10px' }} onClick={() => handleDelete(run)}>
                         Delete
                       </button>

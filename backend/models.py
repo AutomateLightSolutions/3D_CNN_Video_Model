@@ -140,3 +140,47 @@ class PredictionWindowResult(Base):
     class_probs_json = Column(String, nullable=False) # full 10-float softmax vector
 
     segment = relationship("PredictionSegment", back_populates="windows")
+
+
+class GroundTruthSegment(Base):
+    """One ground-truth tile for a match, aggregated at upload time onto the
+    same non-overlapping TILE_SIZE grid inference.py's build_tiles() produces
+    — so it lines up 1:1 with PredictionSegment.tile_index for any run
+    against this match, regardless of window size or model. One CSV per
+    match: a re-upload replaces every row for that match_id."""
+    __tablename__ = "ground_truth_segments"
+    __table_args__ = (UniqueConstraint("match_id", "tile_index", name="uq_ground_truth_match_tile"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    match_id = Column(Integer, ForeignKey("matches.id"), nullable=False)
+    tile_index = Column(Integer, nullable=False)
+    t_start = Column(Float, nullable=False)
+    t_end = Column(Float, nullable=False)
+
+    event_class = Column(String, nullable=False)   # overlap-weighted majority vote from the CSV
+    score = Column(Float, nullable=False)           # overlap-weighted mean of the CSV's Score column
+
+    match = relationship("Match")
+
+
+class MergeWeightEvalRun(Base):
+    """One row per 'Evaluate' click in the merge-weight calibration admin
+    page: a candidate (class_vote_weights, score_merge_weights) pair
+    re-scored against a PredictionRun's cached per-window predictions and
+    this match's GroundTruthSegment rows — no model re-inference. This is
+    the persisted ablation history the calibration page displays."""
+    __tablename__ = "merge_weight_eval_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    prediction_run_id = Column(Integer, ForeignKey("prediction_runs.id"), nullable=False)
+    label = Column(String, nullable=True)   # optional user note, e.g. "uniform baseline"
+
+    class_vote_weights_json = Column(String, nullable=False)   # {"8": w, "16": w, "32": w}
+    score_merge_weights_json = Column(String, nullable=False)
+
+    n_tiles = Column(Integer, nullable=False)
+    metrics_json = Column(String, nullable=False)   # compute_full_metrics-style dict
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    prediction_run = relationship("PredictionRun")

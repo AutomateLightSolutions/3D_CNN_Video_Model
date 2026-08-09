@@ -3,6 +3,7 @@ import MatchList          from './pages/MatchList.jsx'
 import Annotate           from './pages/Annotate.jsx'
 import FeatureExtraction  from './pages/FeatureExtraction.jsx'
 import Predict            from './pages/Predict.jsx'
+import MergeCalibration   from './pages/MergeCalibration.jsx'
 import TrainR3D           from './pages/TrainR3D.jsx'
 import TrainVideoMAE      from './pages/TrainVideoMAE.jsx'
 import TrainSlowFast      from './pages/TrainSlowFast.jsx'
@@ -44,6 +45,7 @@ export default function App() {
             <Route path="/annotate"          element={<Annotate />} />
             <Route path="/features"          element={<FeatureExtraction />} />
             <Route path="/predict"           element={<Predict />} />
+            <Route path="/predict/:runId/calibrate" element={<MergeCalibration />} />
             <Route path="/training/r3d"      element={<TrainR3D />} />
             <Route path="/training/videomae" element={<TrainVideoMAE />} />
             <Route path="/training/slowfast" element={<TrainSlowFast />} />

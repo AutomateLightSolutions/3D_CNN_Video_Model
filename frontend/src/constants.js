@@ -23,3 +23,8 @@ export const PREDICTION_TABS = {
   deep:          { label: 'Deep Learning', models: ['r3d', 'videomae', 'slowfast'] },
   interpretable: { label: 'Interpretable', models: ['rf', 'mlp', 'hybrid'] },
 }
+
+// Multi-window merge — mirrors backend config.py's WINDOW_SIZES / *_MERGE_WEIGHTS.
+export const WINDOW_SIZES = [8, 16, 32]
+export const DEFAULT_CLASS_VOTE_WEIGHTS  = { 8: 0.6, 16: 0.3, 32: 0.1 }
+export const DEFAULT_SCORE_MERGE_WEIGHTS = { 8: 0.6, 16: 0.3, 32: 0.1 }

@@ -11,7 +11,7 @@ from io import StringIO
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -897,6 +897,83 @@ def delete_prediction_run(run_id: int, db: Session = Depends(get_db)):
     if not prediction_history.delete_run(db, run_id):
         raise HTTPException(status_code=404, detail=_PREDICTION_RUN_NOT_FOUND)
     return {"message": "Prediction run deleted"}
+
+
+# ---------------------------------------------------------------------------
+# Merge-weight calibration (admin) — ground truth upload + weight re-scoring
+# ---------------------------------------------------------------------------
+
+@app.get("/matches/{match_id}/ground-truth", response_model=schemas.GroundTruthStatus)
+def get_ground_truth_status(match_id: int, db: Session = Depends(get_db)):
+    if not db.query(models.Match).filter(models.Match.id == match_id).first():
+        raise HTTPException(status_code=404, detail=_MATCH_NOT_FOUND)
+    return schemas.GroundTruthStatus(**inference.ground_truth_status(db, match_id))
+
+
+@app.post("/matches/{match_id}/ground-truth", response_model=schemas.GroundTruthStatus)
+async def upload_ground_truth(match_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    if not db.query(models.Match).filter(models.Match.id == match_id).first():
+        raise HTTPException(status_code=404, detail=_MATCH_NOT_FOUND)
+    raw = await file.read()
+    try:
+        csv_text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="CSV must be UTF-8 encoded")
+    try:
+        n_tiles = inference.ingest_ground_truth_csv(db, match_id, csv_text)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return schemas.GroundTruthStatus(uploaded=True, n_tiles=n_tiles)
+
+
+def _weight_eval_out(row: models.MergeWeightEvalRun) -> schemas.WeightEvalOut:
+    return schemas.WeightEvalOut(
+        id=row.id,
+        prediction_run_id=row.prediction_run_id,
+        label=row.label,
+        class_vote_weights=json.loads(row.class_vote_weights_json),
+        score_merge_weights=json.loads(row.score_merge_weights_json),
+        n_tiles=row.n_tiles,
+        metrics=json.loads(row.metrics_json),
+        created_at=row.created_at,
+    )
+
+
+@app.post("/predictions/{run_id}/weight-evals", response_model=schemas.WeightEvalOut)
+def evaluate_weights(run_id: int, body: schemas.WeightEvalRequest, db: Session = Depends(get_db)):
+    run = db.query(models.PredictionRun).filter(models.PredictionRun.id == run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail=_PREDICTION_RUN_NOT_FOUND)
+    try:
+        result = inference.evaluate_merge_weights(db, run_id, body.class_vote_weights, body.score_merge_weights)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    row = models.MergeWeightEvalRun(
+        prediction_run_id=run_id,
+        label=body.label,
+        class_vote_weights_json=json.dumps(body.class_vote_weights),
+        score_merge_weights_json=json.dumps(body.score_merge_weights),
+        n_tiles=result["n_tiles"],
+        metrics_json=json.dumps(result["metrics"]),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _weight_eval_out(row)
+
+
+@app.get("/predictions/{run_id}/weight-evals", response_model=List[schemas.WeightEvalOut])
+def list_weight_evals(run_id: int, db: Session = Depends(get_db)):
+    if not db.query(models.PredictionRun).filter(models.PredictionRun.id == run_id).first():
+        raise HTTPException(status_code=404, detail=_PREDICTION_RUN_NOT_FOUND)
+    rows = (
+        db.query(models.MergeWeightEvalRun)
+        .filter(models.MergeWeightEvalRun.prediction_run_id == run_id)
+        .order_by(models.MergeWeightEvalRun.created_at.desc())
+        .all()
+    )
+    return [_weight_eval_out(r) for r in rows]
 
 
 # ---------------------------------------------------------------------------
