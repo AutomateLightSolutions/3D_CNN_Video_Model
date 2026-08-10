@@ -109,9 +109,9 @@ TILE_SIZE = 8  # seconds — the merged-timeline resolution
 # Placeholder — revisit once real per-window label volumes are known.
 CLASS_SUPPORT_MIN_COUNT = 5
 
-# Merge weights favoring the finest (8s) window; renormalized over whichever
-# windows actually contribute for a given tile (see inference.py).
-SCORE_MERGE_WEIGHTS = {8: 0.6, 16: 0.3, 32: 0.1}
-CLASS_VOTE_WEIGHTS  = {8: 0.6, 16: 0.3, 32: 0.1}
+# Merge weight favoring the finest (8s) window, shared by both the class-vote
+# and score-merge steps; renormalized over whichever windows actually
+# contribute for a given tile (see inference.py).
+MERGE_WEIGHTS = {8: 0.5, 16: 0.05, 32: 0.45}
 
 PREDICTION_MODEL_TYPES = ("r3d", "videomae", "slowfast", "rf", "mlp", "hybrid")

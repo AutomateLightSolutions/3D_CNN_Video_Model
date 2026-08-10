@@ -165,18 +165,18 @@ class GroundTruthSegment(Base):
 
 class MergeWeightEvalRun(Base):
     """One row per 'Evaluate' click in the merge-weight calibration admin
-    page: a candidate (class_vote_weights, score_merge_weights) pair
-    re-scored against a PredictionRun's cached per-window predictions and
-    this match's GroundTruthSegment rows — no model re-inference. This is
-    the persisted ablation history the calibration page displays."""
+    page: a candidate weight dict — applied to both the class vote and the
+    score merge, same as production — re-scored against a PredictionRun's
+    cached per-window predictions and this match's GroundTruthSegment rows —
+    no model re-inference. This is the persisted ablation history the
+    calibration page displays."""
     __tablename__ = "merge_weight_eval_runs"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     prediction_run_id = Column(Integer, ForeignKey("prediction_runs.id"), nullable=False)
     label = Column(String, nullable=True)   # optional user note, e.g. "uniform baseline"
 
-    class_vote_weights_json = Column(String, nullable=False)   # {"8": w, "16": w, "32": w}
-    score_merge_weights_json = Column(String, nullable=False)
+    weights_json = Column(String, nullable=False)   # {"8": w, "16": w, "32": w}
 
     n_tiles = Column(Integer, nullable=False)
     metrics_json = Column(String, nullable=False)   # compute_full_metrics-style dict

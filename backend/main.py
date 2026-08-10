@@ -11,7 +11,7 @@ from io import StringIO
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -931,12 +931,52 @@ def _weight_eval_out(row: models.MergeWeightEvalRun) -> schemas.WeightEvalOut:
         id=row.id,
         prediction_run_id=row.prediction_run_id,
         label=row.label,
-        class_vote_weights=json.loads(row.class_vote_weights_json),
-        score_merge_weights=json.loads(row.score_merge_weights_json),
+        weights=json.loads(row.weights_json),
         n_tiles=row.n_tiles,
         metrics=json.loads(row.metrics_json),
         created_at=row.created_at,
     )
+
+
+@app.get("/weight-evals", response_model=List[schemas.WeightEvalWithContextOut])
+def list_all_weight_evals(db: Session = Depends(get_db)):
+    """Every weight evaluation across every match/run — the cross-match
+    calibration overview, as opposed to /predictions/{run_id}/weight-evals
+    which scopes to one run."""
+    rows = (
+        db.query(models.MergeWeightEvalRun, models.PredictionRun, models.Match)
+        .join(models.PredictionRun, models.MergeWeightEvalRun.prediction_run_id == models.PredictionRun.id)
+        .join(models.Match, models.PredictionRun.match_id == models.Match.id)
+        .order_by(models.MergeWeightEvalRun.created_at.desc())
+        .all()
+    )
+    return [
+        schemas.WeightEvalWithContextOut(
+            id=ev.id,
+            prediction_run_id=ev.prediction_run_id,
+            label=ev.label,
+            weights=json.loads(ev.weights_json),
+            n_tiles=ev.n_tiles,
+            metrics=json.loads(ev.metrics_json),
+            created_at=ev.created_at,
+            model_type=run.model_type,
+            backbone=run.backbone,
+            match_id=match.id,
+            match_name=match.name,
+        )
+        for ev, run, match in rows
+    ]
+
+
+@app.delete("/weight-evals")
+def delete_weight_evals_global(ids: List[int] = Query(...), db: Session = Depends(get_db)):
+    deleted = (
+        db.query(models.MergeWeightEvalRun)
+        .filter(models.MergeWeightEvalRun.id.in_(ids))
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return {"deleted": deleted}
 
 
 @app.post("/predictions/{run_id}/weight-evals", response_model=schemas.WeightEvalOut)
@@ -944,16 +984,20 @@ def evaluate_weights(run_id: int, body: schemas.WeightEvalRequest, db: Session =
     run = db.query(models.PredictionRun).filter(models.PredictionRun.id == run_id).first()
     if not run:
         raise HTTPException(status_code=404, detail=_PREDICTION_RUN_NOT_FOUND)
+
+    existing = inference.find_existing_eval(db, run_id, body.weights)
+    if existing:
+        return _weight_eval_out(existing)
+
     try:
-        result = inference.evaluate_merge_weights(db, run_id, body.class_vote_weights, body.score_merge_weights)
+        result = inference.evaluate_merge_weights(db, run_id, body.weights)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
     row = models.MergeWeightEvalRun(
         prediction_run_id=run_id,
         label=body.label,
-        class_vote_weights_json=json.dumps(body.class_vote_weights),
-        score_merge_weights_json=json.dumps(body.score_merge_weights),
+        weights_json=json.dumps(body.weights),
         n_tiles=result["n_tiles"],
         metrics_json=json.dumps(result["metrics"]),
     )
@@ -961,6 +1005,18 @@ def evaluate_weights(run_id: int, body: schemas.WeightEvalRequest, db: Session =
     db.commit()
     db.refresh(row)
     return _weight_eval_out(row)
+
+
+@app.post("/predictions/{run_id}/weight-evals/evaluate-all", response_model=schemas.EvaluateAllResult)
+def evaluate_all_weights(run_id: int, step: float = 0.05, db: Session = Depends(get_db)):
+    run = db.query(models.PredictionRun).filter(models.PredictionRun.id == run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail=_PREDICTION_RUN_NOT_FOUND)
+    try:
+        result = inference.evaluate_all_weights(db, run_id, step)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return schemas.EvaluateAllResult(**result)
 
 
 @app.get("/predictions/{run_id}/weight-evals", response_model=List[schemas.WeightEvalOut])
@@ -974,6 +1030,17 @@ def list_weight_evals(run_id: int, db: Session = Depends(get_db)):
         .all()
     )
     return [_weight_eval_out(r) for r in rows]
+
+
+@app.delete("/predictions/{run_id}/weight-evals")
+def delete_weight_evals(run_id: int, ids: List[int] = Query(...), db: Session = Depends(get_db)):
+    deleted = (
+        db.query(models.MergeWeightEvalRun)
+        .filter(models.MergeWeightEvalRun.prediction_run_id == run_id, models.MergeWeightEvalRun.id.in_(ids))
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return {"deleted": deleted}
 
 
 # ---------------------------------------------------------------------------

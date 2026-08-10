@@ -151,8 +151,7 @@ class GroundTruthStatus(BaseModel):
 
 
 class WeightEvalRequest(BaseModel):
-    class_vote_weights: dict    # {"8": float, "16": float, "32": float}
-    score_merge_weights: dict
+    weights: dict    # {"8": float, "16": float, "32": float} — used for both class vote and score merge
     label: Optional[str] = None
 
 
@@ -160,8 +159,23 @@ class WeightEvalOut(BaseModel):
     id: int
     prediction_run_id: int
     label: Optional[str] = None
-    class_vote_weights: dict
-    score_merge_weights: dict
+    weights: dict
     n_tiles: int
     metrics: dict
     created_at: datetime
+
+
+class WeightEvalWithContextOut(WeightEvalOut):
+    """WeightEvalOut plus which model/match it belongs to — for the
+    cross-match calibration overview page, where evals from every run are
+    listed together instead of scoped to one run."""
+    model_type: str
+    backbone: Optional[str] = None
+    match_id: int
+    match_name: str
+
+
+class EvaluateAllResult(BaseModel):
+    created: int
+    skipped_duplicate: int
+    total_combos: int

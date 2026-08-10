@@ -24,7 +24,9 @@ export function MetricCard({ label, value, color }) {
 
 export function PerClassF1Table({ perClassF1 }) {
   if (!perClassF1 || Object.keys(perClassF1).length === 0) return null
-  const entries = Object.entries(perClassF1).sort((a, b) => b[1] - a[1])
+  const entries = Object.entries(perClassF1)
+    .filter(([cls]) => cls !== 'card_event')
+    .sort((a, b) => b[1] - a[1])
   return (
     <div className="card">
       <h2>Per-Class F1 — Event Classification Head</h2>

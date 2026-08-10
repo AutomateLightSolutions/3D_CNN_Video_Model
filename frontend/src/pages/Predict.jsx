@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { Link } from 'react-router-dom'
 import {
   listMatches, getAvailableModels, startPrediction, listPredictionRuns,
   getPredictionProgress, getPredictionLog, getPredictionSegments, deletePredictionRun,
@@ -238,7 +239,10 @@ export default function Predict() {
 
   return (
     <div>
-      <h1>Predict Match</h1>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+        <h1>Predict Match</h1>
+        <Link className="btn btn-secondary" to="/predict/admin">Admin</Link>
+      </div>
       {error && <div className="error-box">{error}</div>}
 
       <div className="card">
@@ -332,14 +336,6 @@ export default function Predict() {
                     <td style={{ fontSize: 12, color: 'var(--text-1)' }}>{formatDate(run.started_at)}</td>
                     <td style={{ fontSize: 12, color: 'var(--text-1)' }}>{formatDate(run.completed_at)}</td>
                     <td onClick={e => e.stopPropagation()} style={{ display: 'flex', gap: 8 }}>
-                      {run.status === 'completed' && (
-                        <a
-                          className="btn btn-secondary" style={{ padding: '4px 10px' }}
-                          href={`/predict/${run.id}/calibrate`} target="_blank" rel="noopener noreferrer"
-                        >
-                          Admin
-                        </a>
-                      )}
                       <button className="btn btn-danger" style={{ padding: '4px 10px' }} onClick={() => handleDelete(run)}>
                         Delete
                       </button>

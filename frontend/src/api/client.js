@@ -155,4 +155,19 @@ export const uploadGroundTruth    = (matchId, file) => {
   return req(`/matches/${matchId}/ground-truth`, { method: 'POST', body })
 }
 export const evaluateWeights   = (runId, payload) => req(`/predictions/${runId}/weight-evals`, json(payload))
+export const evaluateAllWeights = (runId, step = 0.05) =>
+  req(`/predictions/${runId}/weight-evals/evaluate-all?step=${step}`, { method: 'POST' })
 export const listWeightEvals   = (runId) => req(`/predictions/${runId}/weight-evals`)
+export const deleteWeightEvals = (runId, ids) => {
+  const p = new URLSearchParams()
+  ids.forEach(id => p.append('ids', id))
+  return req(`/predictions/${runId}/weight-evals?${p}`, { method: 'DELETE' })
+}
+
+// Cross-match calibration overview — every evaluation across every run.
+export const listAllWeightEvals = () => req('/weight-evals')
+export const deleteWeightEvalsGlobal = (ids) => {
+  const p = new URLSearchParams()
+  ids.forEach(id => p.append('ids', id))
+  return req(`/weight-evals?${p}`, { method: 'DELETE' })
+}

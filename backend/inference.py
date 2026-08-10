@@ -7,9 +7,10 @@ match into non-overlapping 8s segments (TILE_SIZE), extracts an aligned
 boundaries), runs the chosen model on all 3, and merges them into one
 (event_class, highlight_score) per tile:
 
-  - Score merge: fixed-weight average favoring the 8s window (SCORE_MERGE_WEIGHTS).
-  - Class merge: masked weighted vote. Different window sizes have training-
-    label coverage for different event classes (e.g. scrum only ever
+  - Score merge: fixed-weight average favoring the 8s window (MERGE_WEIGHTS).
+  - Class merge: masked weighted vote using the same MERGE_WEIGHTS. Different
+    window sizes have training-label coverage for different event classes
+    (e.g. scrum only ever
     labeled at 16s) — class_support_sets() computes, from the live DB, which
     classes each window size actually has enough labeled examples for, and
     merge_class() zeroes out a window's vote for any class outside its
@@ -37,9 +38,9 @@ import model_defs
 import models
 from clip_extractor import extract_clip, get_video_info
 from config import (
-    CLASS_SUPPORT_MIN_COUNT, CLASS_VOTE_WEIGHTS, HIGHLIGHT_CLASSES,
-    HYBRID_MODEL_DIR, MLP_MODEL_DIR, PREDICTIONS_DIR, R3D_MODEL_DIR,
-    RF_MODEL_DIR, SCORE_MERGE_WEIGHTS, SLOWFAST_MODEL_DIR, TILE_SIZE,
+    CLASS_SUPPORT_MIN_COUNT, HIGHLIGHT_CLASSES,
+    HYBRID_MODEL_DIR, MERGE_WEIGHTS, MLP_MODEL_DIR, PREDICTIONS_DIR, R3D_MODEL_DIR,
+    RF_MODEL_DIR, SLOWFAST_MODEL_DIR, TILE_SIZE,
     VIDEOMAE_MODEL_DIR, WINDOW_SIZES,
 )
 
@@ -302,7 +303,7 @@ def predict_window(model_type: str, bundle: dict, clip_path: str, window_size_s:
 # Merges
 # ---------------------------------------------------------------------------
 
-def merge_score(scores: dict, weights: dict = SCORE_MERGE_WEIGHTS) -> float:
+def merge_score(scores: dict, weights: dict = MERGE_WEIGHTS) -> float:
     """Weighted average across whichever windows produced a score, renormalized."""
     avail = {ws: s for ws, s in scores.items() if s is not None}
     if not avail:
@@ -313,7 +314,7 @@ def merge_score(scores: dict, weights: dict = SCORE_MERGE_WEIGHTS) -> float:
     return float(sum(weights.get(ws, 0.0) * s for ws, s in avail.items()) / total_w)
 
 
-def merge_class(class_probs: dict, support_sets: dict, weights: dict = CLASS_VOTE_WEIGHTS,
+def merge_class(class_probs: dict, support_sets: dict, weights: dict = MERGE_WEIGHTS,
                  classes: list = HIGHLIGHT_CLASSES):
     """Masked weighted vote: each window's softmax is zeroed outside its own
     class support set and renormalized before being combined, so a window
@@ -429,20 +430,11 @@ def ground_truth_status(db, match_id: int) -> dict:
     return {"uploaded": n > 0, "n_tiles": n}
 
 
-def evaluate_merge_weights(db, run_id: int, class_vote_weights: dict, score_merge_weights: dict) -> dict:
-    """Re-merge a completed PredictionRun's *cached* per-window predictions
-    (PredictionWindowResult — no model re-inference) under a candidate weight
-    pair, and score the result against this match's GroundTruthSegment rows.
-    Weights only affect the merge step (merge_score/merge_class), never the
-    per-window model outputs, so this reproduces exactly what a full re-run
-    with those weights would have produced, at a fraction of the cost.
-
-    Returns {"n_tiles": int, "metrics": {...}} — metrics is the same schema
-    training_common.compute_full_metrics uses, on the merged class/score.
-    """
-    from training_common import class_int_for, compute_full_metrics
-    from config import HIGHLIGHT_CLASSES
-
+def _load_eval_tiles(db, run_id: int) -> list:
+    """Every tile of a PredictionRun that has ground truth, pre-loaded with
+    its cached per-window predictions and true (event_class, score) — the
+    weight-independent part of scoring, computed once and reused across
+    however many weight configs get tried against this run."""
     run = db.query(models.PredictionRun).filter(models.PredictionRun.id == run_id).first()
     if not run:
         raise ValueError(f"PredictionRun {run_id} not found")
@@ -456,18 +448,13 @@ def evaluate_merge_weights(db, run_id: int, class_vote_weights: dict, score_merg
         raise ValueError("No ground truth uploaded for this match yet")
     gt_by_tile = {g.tile_index: (g.event_class, g.score) for g in gt_rows}
 
-    support_sets = class_support_sets(db)
-    # Normalize weight-dict keys to int window sizes (JSON payloads arrive with string keys).
-    class_w = {int(k): float(v) for k, v in class_vote_weights.items()}
-    score_w = {int(k): float(v) for k, v in score_merge_weights.items()}
-
     segments = (
         db.query(models.PredictionSegment)
         .filter(models.PredictionSegment.run_id == run_id)
         .all()
     )
 
-    all_labels, all_preds, all_scores_true, all_scores_pred = [], [], [], []
+    tiles = []
     for seg in segments:
         gt = gt_by_tile.get(seg.tile_index)
         if gt is None:
@@ -475,25 +462,138 @@ def evaluate_merge_weights(db, run_id: int, class_vote_weights: dict, score_merg
         true_class, true_score = gt
 
         window_probs, window_scores = {}, {}
-        for w in seg.windows:
-            window_probs[w.window_size] = np.asarray(json.loads(w.class_probs_json), dtype=np.float64)
-            window_scores[w.window_size] = w.highlight_score
+        for win in seg.windows:
+            window_probs[win.window_size] = np.asarray(json.loads(win.class_probs_json), dtype=np.float64)
+            window_scores[win.window_size] = win.highlight_score
         if not window_probs:
             continue
 
-        pred_class, _ = merge_class(window_probs, support_sets, weights=class_w, classes=HIGHLIGHT_CLASSES)
-        pred_score = merge_score(window_scores, weights=score_w)
+        tiles.append((window_probs, window_scores, true_class, true_score))
+
+    if not tiles:
+        raise ValueError("No tiles overlap between this run's segments and the uploaded ground truth")
+    return tiles
+
+
+def _score_weights(tiles: list, support_sets: dict, weights: dict) -> dict:
+    """Merge every pre-loaded tile under one weight dict and score against
+    its ground truth. Pure in-memory — no DB access — so this is cheap
+    enough to call once per grid point in evaluate_all_weights()."""
+    from training_common import class_int_for, compute_full_metrics
+    from config import HIGHLIGHT_CLASSES
+
+    norm_weights = {int(k): float(v) for k, v in weights.items()}
+
+    all_labels, all_preds, all_scores_true, all_scores_pred = [], [], [], []
+    for window_probs, window_scores, true_class, true_score in tiles:
+        pred_class, _ = merge_class(window_probs, support_sets, weights=norm_weights, classes=HIGHLIGHT_CLASSES)
+        pred_score = merge_score(window_scores, weights=norm_weights)
 
         all_labels.append(class_int_for(true_class))
         all_preds.append(class_int_for(pred_class))
         all_scores_true.append(true_score)
         all_scores_pred.append(pred_score)
 
-    if not all_labels:
-        raise ValueError("No tiles overlap between this run's segments and the uploaded ground truth")
-
     metrics = compute_full_metrics(all_labels, all_preds, all_scores_true, all_scores_pred, HIGHLIGHT_CLASSES)
     return {"n_tiles": len(all_labels), "metrics": metrics}
+
+
+def evaluate_merge_weights(db, run_id: int, weights: dict) -> dict:
+    """Re-merge a completed PredictionRun's *cached* per-window predictions
+    (PredictionWindowResult — no model re-inference) under a candidate weight
+    dict — applied to both the class vote and the score merge, same as
+    production — and score the result against this match's
+    GroundTruthSegment rows. Weights only affect the merge step
+    (merge_score/merge_class), never the per-window model outputs, so this
+    reproduces exactly what a full re-run with those weights would have
+    produced, at a fraction of the cost.
+
+    Returns {"n_tiles": int, "metrics": {...}} — metrics is the same schema
+    training_common.compute_full_metrics uses, on the merged class/score.
+    """
+    tiles = _load_eval_tiles(db, run_id)
+    support_sets = class_support_sets(db)
+    return _score_weights(tiles, support_sets, weights)
+
+
+def _weights_key(weights: dict) -> tuple:
+    """Canonical form for duplicate detection — rounds to 4dp so e.g. 0.30
+    and 0.3000001 (a JSON round-trip artifact) compare equal, and accepts
+    both {8: v} and {"8": v} key styles."""
+    def _get(w, k):
+        return w.get(k, w.get(str(k), 0.0))
+    return tuple(round(float(_get(weights, ws)), 4) for ws in WINDOW_SIZES)
+
+
+def find_existing_eval(db, run_id: int, weights: dict):
+    """The MergeWeightEvalRun for this run whose weights match (within 4dp),
+    if any — used to avoid ever storing two rows for the same weight config."""
+    target = _weights_key(weights)
+    existing = (
+        db.query(models.MergeWeightEvalRun)
+        .filter(models.MergeWeightEvalRun.prediction_run_id == run_id)
+        .all()
+    )
+    for row in existing:
+        if _weights_key(json.loads(row.weights_json)) == target:
+            return row
+    return None
+
+
+def generate_weight_grid(step: float = 0.05) -> list:
+    """Every (w8, w16, w32) triple, each a multiple of `step`, summing to 1
+    — the full non-redundant search space (merge_score/merge_class already
+    renormalize, so any grid without the sum-to-1 constraint would waste
+    most of its points on ratios that merge identically to ones already
+    covered). Computed in integer steps to avoid float drift."""
+    n = round(1.0 / step)
+    combos = []
+    for i in range(n + 1):
+        for j in range(n + 1 - i):
+            k = n - i - j
+            combos.append({
+                WINDOW_SIZES[0]: round(i * step, 4),
+                WINDOW_SIZES[1]: round(j * step, 4),
+                WINDOW_SIZES[2]: round(k * step, 4),
+            })
+    return combos
+
+
+def evaluate_all_weights(db, run_id: int, step: float = 0.05) -> dict:
+    """Evaluate every weight combo on the step-0.05 simplex grid against this
+    run, skipping (not recomputing, not re-storing) any combo that already
+    has a MergeWeightEvalRun row for this run — whether from a prior grid
+    run or a manual single Evaluate. Tiles are loaded once and reused across
+    every grid point."""
+    tiles = _load_eval_tiles(db, run_id)
+    support_sets = class_support_sets(db)
+
+    existing = (
+        db.query(models.MergeWeightEvalRun)
+        .filter(models.MergeWeightEvalRun.prediction_run_id == run_id)
+        .all()
+    )
+    seen = {_weights_key(json.loads(row.weights_json)) for row in existing}
+
+    grid = generate_weight_grid(step)
+    created = 0
+    for weights in grid:
+        key = _weights_key(weights)
+        if key in seen:
+            continue
+        result = _score_weights(tiles, support_sets, weights)
+        db.add(models.MergeWeightEvalRun(
+            prediction_run_id=run_id,
+            label=f"grid step={step}",
+            weights_json=json.dumps(weights),
+            n_tiles=result["n_tiles"],
+            metrics_json=json.dumps(result["metrics"]),
+        ))
+        seen.add(key)
+        created += 1
+
+    db.commit()
+    return {"created": created, "skipped_duplicate": len(grid) - created, "total_combos": len(grid)}
 
 
 # ---------------------------------------------------------------------------

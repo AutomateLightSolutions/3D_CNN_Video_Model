@@ -24,7 +24,7 @@ export const PREDICTION_TABS = {
   interpretable: { label: 'Interpretable', models: ['rf', 'mlp', 'hybrid'] },
 }
 
-// Multi-window merge — mirrors backend config.py's WINDOW_SIZES / *_MERGE_WEIGHTS.
+// Multi-window merge — mirrors backend config.py's WINDOW_SIZES / MERGE_WEIGHTS.
+// One weight per window, shared by both the class-vote and score-merge steps.
 export const WINDOW_SIZES = [8, 16, 32]
-export const DEFAULT_CLASS_VOTE_WEIGHTS  = { 8: 0.6, 16: 0.3, 32: 0.1 }
-export const DEFAULT_SCORE_MERGE_WEIGHTS = { 8: 0.6, 16: 0.3, 32: 0.1 }
+export const DEFAULT_MERGE_WEIGHTS = { 8: 0.6, 16: 0.3, 32: 0.1 }
