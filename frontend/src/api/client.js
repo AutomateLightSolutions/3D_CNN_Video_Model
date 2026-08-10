@@ -173,10 +173,27 @@ export const deleteWeightEvals = (runId, ids) => {
   return req(`/predictions/${runId}/weight-evals?${p}`, { method: 'DELETE' })
 }
 
+// VisualScore weight calibration (BaseScore/OpticalFlow formula, not merge weights)
+export const evaluateVisualScoreWeights = (runId, payload) => req(`/predictions/${runId}/visual-score-evals`, json(payload))
+export const evaluateAllVisualScoreWeights = (runId, step = 0.05) =>
+  req(`/predictions/${runId}/visual-score-evals/evaluate-all?step=${step}`, { method: 'POST' })
+export const listVisualScoreEvals = (runId) => req(`/predictions/${runId}/visual-score-evals`)
+export const deleteVisualScoreEvals = (runId, ids) => {
+  const p = new URLSearchParams()
+  ids.forEach(id => p.append('ids', id))
+  return req(`/predictions/${runId}/visual-score-evals?${p}`, { method: 'DELETE' })
+}
+
 // Cross-match calibration overview — every evaluation across every run.
 export const listAllWeightEvals = () => req('/weight-evals')
 export const deleteWeightEvalsGlobal = (ids) => {
   const p = new URLSearchParams()
   ids.forEach(id => p.append('ids', id))
   return req(`/weight-evals?${p}`, { method: 'DELETE' })
+}
+export const listAllVisualScoreEvals = () => req('/visual-score-evals')
+export const deleteVisualScoreEvalsGlobal = (ids) => {
+  const p = new URLSearchParams()
+  ids.forEach(id => p.append('ids', id))
+  return req(`/visual-score-evals?${p}`, { method: 'DELETE' })
 }

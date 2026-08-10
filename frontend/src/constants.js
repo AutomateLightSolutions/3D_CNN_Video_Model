@@ -28,3 +28,6 @@ export const PREDICTION_TABS = {
 // One weight per window, shared by both the class-vote and score-merge steps.
 export const WINDOW_SIZES = [8, 16, 32]
 export const DEFAULT_MERGE_WEIGHTS = { 8: 0.6, 16: 0.3, 32: 0.1 }
+
+// VisualScore training-label formula — mirrors backend config.py's VISUAL_SCORE_WEIGHTS.
+export const DEFAULT_VISUAL_SCORE_WEIGHTS = { base: 0.75, flow: 0.25 }

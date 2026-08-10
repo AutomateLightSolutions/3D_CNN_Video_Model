@@ -65,8 +65,11 @@ class Label(Base):
     clip_id = Column(Integer, ForeignKey("clips.id"), unique=True, nullable=False)
     event_class = Column(String, nullable=False)
     highlight_score = Column(Float, nullable=False)
-    # VisualScore = 0.60 * BaseScore(event_class) + 0.40 * OpticalFlowMagnitude_norm
-    # Populated by feature_extractor.py once optical flow is available for this clip.
+    # VisualScore (see config.VISUAL_SCORE_WEIGHTS / training_common.visual_score_for).
+    # Populated by feature_extractor.py once optical flow is available for this clip —
+    # a cached snapshot for display/export, not read by trainers (they recompute fresh
+    # from the current weights each run, so this can lag config changes; see main.py's
+    # /admin/backfill-visual-scores to resync it after a recalibration).
     merged_visual_score = Column(Float, nullable=True)
     t_start_adjusted = Column(Float, nullable=False)
     t_end_adjusted = Column(Float, nullable=False)
@@ -160,6 +163,11 @@ class GroundTruthSegment(Base):
     event_class = Column(String, nullable=False)   # overlap-weighted majority vote from the CSV
     score = Column(Float, nullable=False)           # overlap-weighted mean of the CSV's Score column
 
+    # Mean optical-flow magnitude of this tile's own 8s clip (PredictionSegment.clip_path),
+    # computed lazily by evaluate_visual_score_weights() the first time it's needed and cached
+    # here — same expensive-once/cheap-after-that pattern as PredictionWindowResult.
+    flow_mag = Column(Float, nullable=True)
+
     match = relationship("Match")
 
 
@@ -180,6 +188,29 @@ class MergeWeightEvalRun(Base):
 
     n_tiles = Column(Integer, nullable=False)
     metrics_json = Column(String, nullable=False)   # compute_full_metrics-style dict
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    prediction_run = relationship("PredictionRun")
+
+
+class VisualScoreEvalRun(Base):
+    """One row per 'Evaluate' click in the VisualScore weight calibration
+    sub-tab: a candidate (base_weight, flow_weight) pair — VisualScore =
+    base_weight*BaseScore(event_class) + flow_weight*flow_mag — scored
+    against this match's GroundTruthSegment rows with score != 0 (rows with
+    score == 0 carry no commentary signal and are excluded). Pure regression
+    metrics only (MAE/MSE/R2) — there's no classification head here."""
+    __tablename__ = "visual_score_eval_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    prediction_run_id = Column(Integer, ForeignKey("prediction_runs.id"), nullable=False)
+    label = Column(String, nullable=True)
+
+    weights_json = Column(String, nullable=False)   # {"base": w, "flow": w}
+
+    n_tiles = Column(Integer, nullable=False)
+    metrics_json = Column(String, nullable=False)   # {"mae":.., "mse":.., "r2":..}
 
     created_at = Column(DateTime, default=datetime.utcnow)
 

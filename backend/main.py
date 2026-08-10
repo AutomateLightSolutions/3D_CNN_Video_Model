@@ -1054,6 +1054,46 @@ def delete_weight_evals_global(ids: List[int] = Query(...), db: Session = Depend
     return {"deleted": deleted}
 
 
+@app.get("/visual-score-evals", response_model=List[schemas.VisualScoreWeightWithContextOut])
+def list_all_visual_score_evals(db: Session = Depends(get_db)):
+    """Every VisualScore weight evaluation across every match/run — the
+    cross-match calibration overview, mirroring /weight-evals."""
+    rows = (
+        db.query(models.VisualScoreEvalRun, models.PredictionRun, models.Match)
+        .join(models.PredictionRun, models.VisualScoreEvalRun.prediction_run_id == models.PredictionRun.id)
+        .join(models.Match, models.PredictionRun.match_id == models.Match.id)
+        .order_by(models.VisualScoreEvalRun.created_at.desc())
+        .all()
+    )
+    return [
+        schemas.VisualScoreWeightWithContextOut(
+            id=ev.id,
+            prediction_run_id=ev.prediction_run_id,
+            label=ev.label,
+            weights=json.loads(ev.weights_json),
+            n_tiles=ev.n_tiles,
+            metrics=json.loads(ev.metrics_json),
+            created_at=ev.created_at,
+            model_type=run.model_type,
+            backbone=run.backbone,
+            match_id=match.id,
+            match_name=match.name,
+        )
+        for ev, run, match in rows
+    ]
+
+
+@app.delete("/visual-score-evals")
+def delete_visual_score_evals_global(ids: List[int] = Query(...), db: Session = Depends(get_db)):
+    deleted = (
+        db.query(models.VisualScoreEvalRun)
+        .filter(models.VisualScoreEvalRun.id.in_(ids))
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return {"deleted": deleted}
+
+
 @app.post("/predictions/{run_id}/weight-evals", response_model=schemas.WeightEvalOut)
 def evaluate_weights(run_id: int, body: schemas.WeightEvalRequest, db: Session = Depends(get_db)):
     run = db.query(models.PredictionRun).filter(models.PredictionRun.id == run_id).first()
@@ -1116,6 +1156,112 @@ def delete_weight_evals(run_id: int, ids: List[int] = Query(...), db: Session = 
     )
     db.commit()
     return {"deleted": deleted}
+
+
+# ---------------------------------------------------------------------------
+# VisualScore weight calibration (admin, sub-tab) — calibrates the training-
+# label formula's (BaseScore, OpticalFlow) weights, not the merge weights
+# above. Same run-scoping and dedup pattern as /weight-evals.
+# ---------------------------------------------------------------------------
+
+def _visual_eval_out(row: models.VisualScoreEvalRun) -> schemas.VisualScoreWeightOut:
+    return schemas.VisualScoreWeightOut(
+        id=row.id,
+        prediction_run_id=row.prediction_run_id,
+        label=row.label,
+        weights=json.loads(row.weights_json),
+        n_tiles=row.n_tiles,
+        metrics=json.loads(row.metrics_json),
+        created_at=row.created_at,
+    )
+
+
+@app.post("/predictions/{run_id}/visual-score-evals", response_model=schemas.VisualScoreWeightOut)
+def evaluate_visual_score_weights_route(run_id: int, body: schemas.VisualScoreWeightRequest, db: Session = Depends(get_db)):
+    if not db.query(models.PredictionRun).filter(models.PredictionRun.id == run_id).first():
+        raise HTTPException(status_code=404, detail=_PREDICTION_RUN_NOT_FOUND)
+
+    existing = inference.find_existing_visual_eval(db, run_id, body.weights)
+    if existing:
+        return _visual_eval_out(existing)
+
+    try:
+        result = inference.evaluate_visual_score_weights(db, run_id, body.weights)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    row = models.VisualScoreEvalRun(
+        prediction_run_id=run_id,
+        label=body.label,
+        weights_json=json.dumps(body.weights),
+        n_tiles=result["n_tiles"],
+        metrics_json=json.dumps(result["metrics"]),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _visual_eval_out(row)
+
+
+@app.post("/predictions/{run_id}/visual-score-evals/evaluate-all", response_model=schemas.EvaluateAllResult)
+def evaluate_all_visual_score_weights_route(run_id: int, step: float = 0.05, db: Session = Depends(get_db)):
+    if not db.query(models.PredictionRun).filter(models.PredictionRun.id == run_id).first():
+        raise HTTPException(status_code=404, detail=_PREDICTION_RUN_NOT_FOUND)
+    try:
+        result = inference.evaluate_all_visual_score_weights(db, run_id, step)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return schemas.EvaluateAllResult(**result)
+
+
+@app.get("/predictions/{run_id}/visual-score-evals", response_model=List[schemas.VisualScoreWeightOut])
+def list_visual_score_evals(run_id: int, db: Session = Depends(get_db)):
+    if not db.query(models.PredictionRun).filter(models.PredictionRun.id == run_id).first():
+        raise HTTPException(status_code=404, detail=_PREDICTION_RUN_NOT_FOUND)
+    rows = (
+        db.query(models.VisualScoreEvalRun)
+        .filter(models.VisualScoreEvalRun.prediction_run_id == run_id)
+        .order_by(models.VisualScoreEvalRun.created_at.desc())
+        .all()
+    )
+    return [_visual_eval_out(r) for r in rows]
+
+
+@app.delete("/predictions/{run_id}/visual-score-evals")
+def delete_visual_score_evals(run_id: int, ids: List[int] = Query(...), db: Session = Depends(get_db)):
+    deleted = (
+        db.query(models.VisualScoreEvalRun)
+        .filter(models.VisualScoreEvalRun.prediction_run_id == run_id, models.VisualScoreEvalRun.id.in_(ids))
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return {"deleted": deleted}
+
+
+@app.post("/admin/backfill-visual-scores")
+def backfill_visual_scores(db: Session = Depends(get_db)):
+    """Recompute Label.merged_visual_score for every labeled clip using the
+    *current* config.VISUAL_SCORE_WEIGHTS. Trainers already recompute
+    VisualScore fresh every run (so recalibrating never requires this to
+    retrain correctly) — this only resyncs the cached column used by the
+    Export page and Match stats histogram, so they don't show stale numbers
+    after a recalibration. Reuses each clip's already-cached optical-flow
+    feature (Storage/features/{clip_id}.npy) — no video reprocessing."""
+    import numpy as np
+    from training_common import visual_score_for
+
+    updated, skipped = 0, 0
+    labels = db.query(models.Label).join(models.Clip).all()
+    for lbl in labels:
+        feat_path = FEATURES_DIR / f"{lbl.clip_id}.npy"
+        if not feat_path.exists():
+            skipped += 1
+            continue
+        flow_mag = float(np.load(str(feat_path))[0])
+        lbl.merged_visual_score = round(visual_score_for(lbl.event_class, flow_mag), 4)
+        updated += 1
+    db.commit()
+    return {"updated": updated, "skipped_no_features": skipped}
 
 
 # ---------------------------------------------------------------------------

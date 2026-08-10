@@ -184,3 +184,27 @@ class EvaluateAllResult(BaseModel):
     created: int
     skipped_duplicate: int
     total_combos: int
+
+
+class VisualScoreWeightRequest(BaseModel):
+    weights: dict    # {"base": float, "flow": float}
+    label: Optional[str] = None
+
+
+class VisualScoreWeightOut(BaseModel):
+    id: int
+    prediction_run_id: int
+    label: Optional[str] = None
+    weights: dict
+    n_tiles: int
+    metrics: dict
+    created_at: datetime
+
+
+class VisualScoreWeightWithContextOut(VisualScoreWeightOut):
+    """VisualScoreWeightOut plus which model/match it belongs to — for the
+    cross-match calibration overview page."""
+    model_type: str
+    backbone: Optional[str] = None
+    match_id: int
+    match_name: str

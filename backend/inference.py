@@ -597,6 +597,148 @@ def evaluate_all_weights(db, run_id: int, step: float = 0.05) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# VisualScore weight calibration (admin, sub-tab) — the training-label
+# formula VisualScore = base_weight*BaseScore(event_class) + flow_weight*
+# OpticalFlowMagnitude, not the merge weights above. Calibrated against the
+# same uploaded ground-truth CSV, but only rows with score != 0 (a zero
+# means no commentary signal for that tile, not "definitely zero
+# highlight-worthiness") and against each tile's *own* optical flow, lazily
+# computed from its kept 8s clip and cached on GroundTruthSegment.flow_mag.
+# ---------------------------------------------------------------------------
+
+def _load_visual_score_tiles(db, run_id: int) -> list:
+    """Ground-truth tiles for this run's match with score != 0, each paired
+    with its BaseScore(event_class) and (lazily computed, cached) flow_mag.
+    Returns a list of (base_score, flow_mag, true_score) tuples."""
+    import feature_extractor
+    from config import BASE_SCORES
+
+    run = db.query(models.PredictionRun).filter(models.PredictionRun.id == run_id).first()
+    if not run:
+        raise ValueError(f"PredictionRun {run_id} not found")
+
+    gt_rows = (
+        db.query(models.GroundTruthSegment)
+        .filter(models.GroundTruthSegment.match_id == run.match_id, models.GroundTruthSegment.score != 0)
+        .all()
+    )
+    if not gt_rows:
+        raise ValueError("No ground truth with a nonzero score for this match yet")
+
+    seg_by_tile = {
+        s.tile_index: s.clip_path
+        for s in db.query(models.PredictionSegment).filter(models.PredictionSegment.run_id == run_id).all()
+    }
+
+    tiles = []
+    dirty = False
+    for g in gt_rows:
+        clip_path = seg_by_tile.get(g.tile_index)
+        if not clip_path:
+            continue
+
+        if g.flow_mag is None:
+            if not Path(clip_path).exists():
+                continue
+            g.flow_mag = feature_extractor.mean_flow_magnitude(clip_path)
+            dirty = True
+
+        base_score = BASE_SCORES.get(g.event_class, 0.1)
+        tiles.append((base_score, g.flow_mag, g.score))
+
+    if dirty:
+        db.commit()
+
+    if not tiles:
+        raise ValueError("No usable tiles — their 8s clip files may have been deleted since the Predict run.")
+    return tiles
+
+
+def _score_visual_weights(tiles: list, weights: dict) -> dict:
+    base_w = float(weights.get("base", weights.get("base_weight", 0.0)))
+    flow_w = float(weights.get("flow", weights.get("flow_weight", 0.0)))
+
+    preds = np.array([
+        np.clip(base_w * base_score + flow_w * flow_mag, 0.0, 1.0)
+        for base_score, flow_mag, _ in tiles
+    ])
+    true = np.array([t for _, _, t in tiles])
+
+    mae = float(np.mean(np.abs(true - preds)))
+    ss_res = float(np.sum((true - preds) ** 2))
+    ss_tot = float(np.sum((true - true.mean()) ** 2))
+    mse = ss_res / len(true)
+    r2 = 1.0 - ss_res / ss_tot if ss_tot > 1e-8 else 0.0
+
+    return {"n_tiles": len(tiles), "metrics": {"mae": round(mae, 6), "mse": round(mse, 6), "r2": round(r2, 6)}}
+
+
+def evaluate_visual_score_weights(db, run_id: int, weights: dict) -> dict:
+    tiles = _load_visual_score_tiles(db, run_id)
+    return _score_visual_weights(tiles, weights)
+
+
+def _visual_weights_key(weights: dict) -> tuple:
+    base_w = weights.get("base", weights.get("base_weight", 0.0))
+    flow_w = weights.get("flow", weights.get("flow_weight", 0.0))
+    return (round(float(base_w), 4), round(float(flow_w), 4))
+
+
+def find_existing_visual_eval(db, run_id: int, weights: dict):
+    target = _visual_weights_key(weights)
+    existing = (
+        db.query(models.VisualScoreEvalRun)
+        .filter(models.VisualScoreEvalRun.prediction_run_id == run_id)
+        .all()
+    )
+    for row in existing:
+        if _visual_weights_key(json.loads(row.weights_json)) == target:
+            return row
+    return None
+
+
+def generate_visual_weight_grid(step: float = 0.05) -> list:
+    """(base_weight, flow_weight) pairs summing to 1 — a single free
+    variable, unlike the 3-window merge grid, since flow_weight = 1 - base_weight."""
+    n = round(1.0 / step)
+    return [
+        {"base": round(i * step, 4), "flow": round(1.0 - i * step, 4)}
+        for i in range(n + 1)
+    ]
+
+
+def evaluate_all_visual_score_weights(db, run_id: int, step: float = 0.05) -> dict:
+    tiles = _load_visual_score_tiles(db, run_id)
+
+    existing = (
+        db.query(models.VisualScoreEvalRun)
+        .filter(models.VisualScoreEvalRun.prediction_run_id == run_id)
+        .all()
+    )
+    seen = {_visual_weights_key(json.loads(row.weights_json)) for row in existing}
+
+    grid = generate_visual_weight_grid(step)
+    created = 0
+    for weights in grid:
+        key = _visual_weights_key(weights)
+        if key in seen:
+            continue
+        result = _score_visual_weights(tiles, weights)
+        db.add(models.VisualScoreEvalRun(
+            prediction_run_id=run_id,
+            label=f"grid step={step}",
+            weights_json=json.dumps(weights),
+            n_tiles=result["n_tiles"],
+            metrics_json=json.dumps(result["metrics"]),
+        ))
+        seen.add(key)
+        created += 1
+
+    db.commit()
+    return {"created": created, "skipped_duplicate": len(grid) - created, "total_combos": len(grid)}
+
+
+# ---------------------------------------------------------------------------
 # Log / progress helpers (mirrors clip_extractor.py's conventions)
 # ---------------------------------------------------------------------------
 

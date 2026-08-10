@@ -336,6 +336,34 @@ def extract_features(clip_path, yolo_model, pose_model):
     return vec[:N_FEATURES]
 
 
+def mean_flow_magnitude(clip_path) -> float:
+    """Just index [0] of the 25-dim feature vector — mean optical flow
+    magnitude, normalized the same way training features are (clipped to
+    [0,1]) — computed standalone (no YOLO/MediaPipe needed) for clips that
+    don't have a cached feature vector, e.g. ground-truth Predict tiles used
+    by calibrate_visual_score weight evaluation."""
+    import cv2
+    import numpy as np
+
+    cap = cv2.VideoCapture(str(clip_path))
+    frames_gray = []
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frames_gray.append(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
+    cap.release()
+
+    if not frames_gray:
+        return 0.0
+
+    step = max(1, len(frames_gray) // 64)
+    frames_gray = frames_gray[::step]
+
+    flow_feat = _flow_features(frames_gray)
+    return float(np.clip(flow_feat[0], 0.0, 1.0))
+
+
 # ─── main ────────────────────────────────────────────────────────────────────
 
 def main():

@@ -64,10 +64,9 @@ HIGHLIGHT_CLASSES = [
     "tmo_replay", "normal_play",
 ]
 
-# BaseScore per class for VisualScore formula:
-# VisualScore = 0.60 * BaseScore(class) + 0.40 * OpticalFlowMagnitude_norm
-# Derived from audience survey on highlight-worthiness per event type
-# (survey score / 100, normalised to [0, 1]).
+# BaseScore per class for the VisualScore formula (see VISUAL_SCORE_WEIGHTS
+# below). Derived from audience survey on highlight-worthiness per event
+# type (survey score / 100, normalised to [0, 1]).
 BASE_SCORES = {
     "try":         1.0000,   # 100.00
     "goal_kick":   0.7814,   # 78.14
@@ -80,6 +79,16 @@ BASE_SCORES = {
     "tmo_replay":  0.7500,   # 75.00
     "normal_play": 0.0054,   # 0.54
 }
+
+# VisualScore = base*BaseScore(event_class) + flow*OpticalFlowMagnitude_norm
+# — the training-label regression target every trainer computes fresh from
+# this + the labeled clip's own cached flow feature (see
+# training_common.visual_score_for). Single source of truth: change this
+# and every future training run picks it up automatically. Calibrated via
+# the VisualScore Weights sub-tab (Predict Admin → Weight Calibration) —
+# base=0.75/flow=0.25 outperformed the original 0.60/0.40 guess on match 8's
+# independent ground truth (R² 0.762 vs 0.545, MAE 0.101 vs 0.123).
+VISUAL_SCORE_WEIGHTS = {"base": 0.75, "flow": 0.25}
 
 CONTEXT_CLASSES = ["tmo_replay"]
 

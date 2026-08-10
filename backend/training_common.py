@@ -97,15 +97,20 @@ def class_int_for(event_class: str) -> int:
 
 
 def visual_score_for(event_class: str, flow_mag: float) -> float:
-    """VisualScore = 0.60 * BaseScore(class) + 0.40 * OpticalFlowMagnitude_norm.
+    """VisualScore = VISUAL_SCORE_WEIGHTS['base'] * BaseScore(class)
+    + VISUAL_SCORE_WEIGHTS['flow'] * OpticalFlowMagnitude_norm.
 
     Single definition point — previously this formula was hardcoded
-    identically in five separate trainer files.
+    identically in five separate trainer files, and its weights were
+    hardcoded here too. Now reads config.VISUAL_SCORE_WEIGHTS, so
+    recalibrating it (see the VisualScore Weights admin sub-tab) only
+    requires changing config.py — every trainer picks it up on its next run.
     """
-    from config import BASE_SCORES
+    from config import BASE_SCORES, VISUAL_SCORE_WEIGHTS
 
     base = BASE_SCORES.get(event_class, 0.1)
-    return float(np.clip(0.60 * base + 0.40 * flow_mag, 0.0, 1.0))
+    weighted = VISUAL_SCORE_WEIGHTS["base"] * base + VISUAL_SCORE_WEIGHTS["flow"] * flow_mag
+    return float(np.clip(weighted, 0.0, 1.0))
 
 
 def compute_full_metrics(all_labels, all_preds, all_scores_true, all_scores_pred,
