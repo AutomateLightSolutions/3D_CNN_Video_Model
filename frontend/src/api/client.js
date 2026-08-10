@@ -113,6 +113,15 @@ export const getHybridTrainingStatus  = ()  => _hybrid.status()
 export const getHybridTrainingLogs    = ()  => _hybrid.logs()
 export const getHybridTrainingMetrics = ()  => _hybrid.metrics()
 
+// --- Training — per-model clip filter ("train on specific matches only") ---
+export const getClipFilter   = (modelType) => req(`/training/${modelType}/clip-filter`)
+export const uploadClipFilter = (modelType, file) => {
+  const body = new FormData()
+  body.append('file', file)
+  return req(`/training/${modelType}/clip-filter`, { method: 'POST', body })
+}
+export const clearClipFilter = (modelType) => req(`/training/${modelType}/clip-filter`, { method: 'DELETE' })
+
 // --- Training History ---
 export const listTrainingRuns = (modelType) => {
   const p = new URLSearchParams()

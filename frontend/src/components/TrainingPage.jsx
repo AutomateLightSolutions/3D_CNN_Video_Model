@@ -7,8 +7,68 @@ import {
 } from 'chart.js'
 import { Line } from 'react-chartjs-2'
 import { BestMetricsPanel, PerClassF1Table, FeatureImportanceTable } from './MetricsDisplay.jsx'
+import { getClipFilter, uploadClipFilter, clearClipFilter } from '../api/client.js'
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend)
+
+// ---------------------------------------------------------------------------
+// "Train on specific matches only" — upload a filtered copy of the exported
+// labels CSV (Export page → filter rows in a spreadsheet → upload here) to
+// restrict this model's next run to just those clips. No upload = trains on
+// every labeled clip in the system, same as before this existed.
+// ---------------------------------------------------------------------------
+function ClipFilterPanel({ modelType, disabled }) {
+  const [status, setStatus] = useState({ active: false, n_clips: 0 })
+  const [uploading, setUploading] = useState(false)
+  const [error, setError] = useState('')
+  const fileInputRef = useRef(null)
+
+  const refresh = () => getClipFilter(modelType).then(setStatus).catch(() => {})
+  useEffect(() => { refresh() }, [modelType])
+
+  const handleUpload = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setError('')
+    setUploading(true)
+    try {
+      setStatus(await uploadClipFilter(modelType, file))
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setUploading(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
+  const handleClear = async () => {
+    setError('')
+    try {
+      setStatus(await clearClipFilter(modelType))
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  return (
+    <div style={{ minWidth: 220 }}>
+      <div style={{ fontSize: 11, color: 'var(--text-2)', marginBottom: 4 }}>
+        Train on Specific Matches (CSV)
+      </div>
+      {status.active ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span className="badge badge-green">Filtered — {status.n_clips} clips</span>
+          <button className="btn btn-secondary" type="button" style={{ padding: '2px 8px', fontSize: 12 }} onClick={handleClear} disabled={disabled}>
+            Clear
+          </button>
+        </div>
+      ) : (
+        <input ref={fileInputRef} type="file" accept=".csv" onChange={handleUpload} disabled={disabled || uploading} style={{ fontSize: 12 }} />
+      )}
+      {error && <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 4 }}>{error}</div>}
+    </div>
+  )
+}
 
 const POLL_MS = 3000
 
@@ -204,6 +264,7 @@ export default function TrainingPage({ title, defaultEpochs, defaultBatch, api, 
             </select>
           </div>
           {extraControls}
+          {modelType && <ClipFilterPanel modelType={modelType} disabled={isRunning} />}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{ fontSize: 12, color: 'var(--text-2)' }}>
               Epoch {metrics ? `${metrics.current_epoch ?? '—'} / ${metrics.total_epochs ?? '—'}` : '—'}

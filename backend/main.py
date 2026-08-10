@@ -776,6 +776,81 @@ def hybrid_training_metrics():
 
 
 # ---------------------------------------------------------------------------
+# Training — per-model clip filter ("train on specific matches only")
+#
+# Workflow: export the full labeled dataset (GET /export/csv), filter it
+# down to the desired matches in a spreadsheet, then upload that CSV here.
+# The trainer reads clip_filter.json from its own output_dir at start —
+# see training_common.load_clip_filter(). No upload = no filter = train on
+# every labeled clip, same as before this feature existed.
+# ---------------------------------------------------------------------------
+
+_TRAINER_MODEL_DIRS = {
+    "r3d": R3D_MODEL_DIR, "videomae": VIDEOMAE_MODEL_DIR, "slowfast": SLOWFAST_MODEL_DIR,
+    "rf": RF_MODEL_DIR, "mlp": MLP_MODEL_DIR, "hybrid": HYBRID_MODEL_DIR,
+}
+_CLIP_FILTER_FILENAME = "clip_filter.json"
+
+
+def _clip_filter_path(model_type: str) -> Path:
+    if model_type not in _TRAINER_MODEL_DIRS:
+        raise HTTPException(status_code=400, detail=f"Unknown model_type: {model_type}")
+    return _TRAINER_MODEL_DIRS[model_type] / _CLIP_FILTER_FILENAME
+
+
+@app.get("/training/{model_type}/clip-filter", response_model=schemas.ClipFilterStatus)
+def get_clip_filter(model_type: str):
+    path = _clip_filter_path(model_type)
+    if not path.exists():
+        return schemas.ClipFilterStatus(active=False, n_clips=0)
+    try:
+        ids = json.loads(path.read_text(encoding="utf-8"))
+        return schemas.ClipFilterStatus(active=True, n_clips=len(ids))
+    except (json.JSONDecodeError, OSError):
+        return schemas.ClipFilterStatus(active=False, n_clips=0)
+
+
+@app.post("/training/{model_type}/clip-filter", response_model=schemas.ClipFilterStatus)
+async def upload_clip_filter(model_type: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    path = _clip_filter_path(model_type)
+    raw = await file.read()
+    try:
+        csv_text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="CSV must be UTF-8 encoded")
+
+    reader = csv.DictReader(StringIO(csv_text))
+    if not reader.fieldnames or "clip_id" not in reader.fieldnames:
+        raise HTTPException(status_code=400, detail="CSV must have a clip_id column — use the exported labels CSV (Export page) and filter rows there.")
+
+    requested_ids = set()
+    for row in reader:
+        try:
+            requested_ids.add(int(row["clip_id"]))
+        except (KeyError, ValueError, TypeError):
+            continue
+    if not requested_ids:
+        raise HTTPException(status_code=400, detail="No valid clip_id values found in the uploaded CSV.")
+
+    valid_ids = {
+        cid for (cid,) in db.query(models.Clip.id).filter(models.Clip.id.in_(requested_ids)).all()
+    }
+    if not valid_ids:
+        raise HTTPException(status_code=400, detail="None of the clip_id values in the CSV match clips in the database.")
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(sorted(valid_ids)), encoding="utf-8")
+    return schemas.ClipFilterStatus(active=True, n_clips=len(valid_ids))
+
+
+@app.delete("/training/{model_type}/clip-filter", response_model=schemas.ClipFilterStatus)
+def clear_clip_filter(model_type: str):
+    path = _clip_filter_path(model_type)
+    path.unlink(missing_ok=True)
+    return schemas.ClipFilterStatus(active=False, n_clips=0)
+
+
+# ---------------------------------------------------------------------------
 # Training History
 # ---------------------------------------------------------------------------
 

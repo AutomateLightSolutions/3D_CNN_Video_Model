@@ -81,6 +81,11 @@ class TrainingConfig(BaseModel):
     backbone: str = "r3d"  # for trainer_hybrid: "r3d" | "videomae" | "slowfast"
 
 
+class ClipFilterStatus(BaseModel):
+    active: bool
+    n_clips: int = 0
+
+
 class TrainingRunOut(BaseModel):
     id: int
     model_type: str

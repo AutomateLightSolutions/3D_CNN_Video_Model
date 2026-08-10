@@ -11,18 +11,46 @@ why (clip-level splits leak match-specific cues; per-model LabelEncoders can
 assign different integers to the same class across runs).
 """
 
+import json
+
 import numpy as np
 
 SPLIT_SEED = 42
 TRAIN_FRACTION = 0.85
 
+CLIP_FILTER_FILENAME = "clip_filter.json"
 
-def load_labeled_split(db):
+
+def load_clip_filter(output_dir):
+    """Reads {output_dir}/clip_filter.json, written by
+    POST /training/{model_type}/clip-filter when the user uploads a filtered
+    export CSV to restrict this trainer to specific matches. Returns a set
+    of allowed clip ids, or None if no filter is active (train on every
+    labeled clip, the default).
+    """
+    from pathlib import Path
+
+    path = Path(output_dir) / CLIP_FILTER_FILENAME
+    if not path.exists():
+        return None
+    try:
+        ids = json.loads(path.read_text(encoding="utf-8"))
+        return {int(i) for i in ids}
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def load_labeled_split(db, allowed_clip_ids=None):
     """Match-level train/val split: no match's clips appear in both sets.
 
     Deterministic and identical across every trainer given the same labeled
     dataset — match IDs are sorted before shuffling so the result does not
     depend on set/dict iteration order.
+
+    allowed_clip_ids: optional set of Clip.id — when given, every other
+    labeled clip is excluded *before* the match-level split is computed, so
+    only matches actually represented in the filter can appear in either
+    split (see load_clip_filter).
 
     Returns (train_raw, val_raw), each a list of (Clip, Label) tuples.
     """
@@ -35,6 +63,8 @@ def load_labeled_split(db):
         .filter(Label.highlight_score.isnot(None))
         .all()
     )
+    if allowed_clip_ids is not None:
+        labeled = [(c, l, m) for c, l, m in labeled if c.id in allowed_clip_ids]
     if not labeled:
         return [], []
 

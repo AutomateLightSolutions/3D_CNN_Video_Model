@@ -156,7 +156,7 @@ def main():
     from sqlalchemy.orm import sessionmaker
 
     from config import DB_PATH, R3D_MODEL_DIR, HIGHLIGHT_CLASSES, WINDOW_CONFIG, R3D_METRICS_PATH, FEATURES_DIR
-    from training_common import load_labeled_split, class_int_for, visual_score_for, compute_full_metrics
+    from training_common import load_labeled_split, load_clip_filter, class_int_for, visual_score_for, compute_full_metrics
     from model_defs import R3DHighlightModel, R3D_N_FRAMES
 
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
@@ -174,7 +174,10 @@ def main():
     Session = sessionmaker(bind=db_engine)
     db = Session()
 
-    train_raw, val_raw = load_labeled_split(db)
+    clip_filter = load_clip_filter(output_dir)
+    if clip_filter is not None:
+        print(f"Clip filter active: training restricted to {len(clip_filter)} uploaded clip ids.")
+    train_raw, val_raw = load_labeled_split(db, allowed_clip_ids=clip_filter)
 
     if not train_raw:
         print("No labeled clips found. Exiting.")
